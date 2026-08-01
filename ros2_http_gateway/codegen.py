@@ -130,6 +130,12 @@ _BYTE_LIKE: Final = frozenset({"uint8", "char"})
 # building a Python list. Below it the fixed cost of numpy.frombuffer (~0.45us) dominates;
 # above it the view wins and keeps winning (1.5x at 128 doubles, 3.3x at 8192 int32s).
 # Measured at 64 for float64, int64, int32 and int16 alike on CPython 3.12 + orjson 3.11.
+#
+# Under numpy 1.26 the crossover sits nearer 100 than 64, so between those lengths this picks
+# the view when a list would be around 7% quicker -- 0.12us on a request costing hundreds.
+# Not worth a version check, and noted here so nobody re-measures on one major and "fixes" it.
+# The JSON produced is byte-identical either way, verified across numpy 1.26.4 and 2.5.1 for
+# every dtype the converters emit.
 _VIEW_FROM: Final = 64
 
 
