@@ -157,12 +157,30 @@ def test_caches_exist_only_for_topic_reads(runtime: RosRuntime) -> None:
 
 def test_qos_presets_map_to_the_rclpy_profiles() -> None:
     """A reliable subscription never matches a best-effort publisher, hence the option."""
-    from rclpy.qos import QoSReliabilityPolicy
+    from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy
 
     from ros2_http_gateway.runtime import qos_profile
 
-    assert qos_profile("default").reliability == QoSReliabilityPolicy.RELIABLE
+    default = qos_profile("default")
+    assert default.reliability == QoSReliabilityPolicy.RELIABLE
+    assert default.durability == DurabilityPolicy.VOLATILE
+    assert default.history == HistoryPolicy.KEEP_LAST
+    assert default.depth == 10
+
     assert qos_profile("sensor_data").reliability == QoSReliabilityPolicy.BEST_EFFORT
+
+
+def test_qos_does_not_read_distro_specific_preset_members() -> None:
+    """Regression cover for a startup AttributeError on Humble.
+
+    ``QoSPresetProfiles`` membership varies by distro -- Humble has no ``DEFAULT`` -- so the
+    profiles are built from ``QoSProfile`` and the long-standing module-level constant
+    instead. This is the whole reason the Humble leg of CI is worth having.
+    """
+    source = (Path(__file__).resolve().parents[1] / "ros2_http_gateway" / "runtime.py").read_text()
+    body = source[source.index("def qos_profile") : source.index("def make_executor")]
+    code = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
+    assert "QoSPresetProfiles" not in code, "the comment may mention it; the code may not"
 
 
 def test_a_sensor_data_endpoint_receives_from_a_best_effort_publisher(tmp_path: Path) -> None:

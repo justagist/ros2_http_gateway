@@ -38,6 +38,8 @@ _SHUTDOWN_JOIN_S: Final = 5.0
 # How long to give discovery before complaining that a subscription found nobody. Long
 # enough not to cry wolf while a system is still coming up.
 _MATCH_WARN_AFTER_S: Final = 8.0
+# Matches what QoSPresetProfiles.DEFAULT carries on the distros that define it.
+_DEFAULT_QOS_DEPTH: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,10 +64,16 @@ def qos_profile(preset: QosPreset) -> Any:
     Returns:
         The rclpy QoS profile to subscribe or publish with.
     """
-    from rclpy.qos import QoSPresetProfiles
+    # Built from the primitives rather than from QoSPresetProfiles, whose membership varies
+    # by distro: Humble has no DEFAULT member, so reading it there is an AttributeError at
+    # startup. QoSProfile(depth=10) is byte-for-byte what DEFAULT is on the distros that do
+    # have it (verified: reliable, volatile, keep-last, depth 10), and
+    # qos_profile_sensor_data has existed for as long as rclpy has.
+    from rclpy.qos import QoSProfile, qos_profile_sensor_data
 
-    chosen = QoSPresetProfiles.SENSOR_DATA if preset == "sensor_data" else QoSPresetProfiles.DEFAULT
-    return chosen.value
+    if preset == "sensor_data":
+        return qos_profile_sensor_data
+    return QoSProfile(depth=_DEFAULT_QOS_DEPTH)
 
 
 def make_executor(kind: Executor, context: Any) -> tuple[Any, str]:

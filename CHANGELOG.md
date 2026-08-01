@@ -100,6 +100,9 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- QoS profiles are built from `QoSProfile` and `qos_profile_sensor_data` rather than read off
+  `QoSPresetProfiles`, whose membership varies by distro: Humble has no `DEFAULT` member, so
+  every ROS test there failed at setup with `AttributeError: DEFAULT`.
 - CI constrains numpy in the ROS venv to the major version the distro ships. Installing
   numpy 2 alongside Humble's numpy-1-built rosidl extensions is the documented incompatible
   direction and showed up as a segfault plus a scatter of errors.
