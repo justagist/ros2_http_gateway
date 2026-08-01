@@ -350,13 +350,17 @@ async def test_a_query_string_never_reaches_the_audit_record(gateway: Harness) -
 # --------------------------------------------------------------------------------------
 
 
-async def test_action_endpoints_say_they_are_not_served_yet(gateway: Harness) -> None:
-    """A 501 naming the phase beats a 404 that reads like a config mistake."""
-    response = await gateway.post("/pick", {})
-    assert response.status_code == 501
-    payload = response.json()
-    assert payload["error_code"] == "NOT_IMPLEMENTED"
-    assert "phase 4" in payload["message"]
+async def test_an_action_endpoint_is_served_and_reports_a_missing_server(
+    gateway: Harness,
+) -> None:
+    """Nothing offers /gateway_test_action, so this exercises the unavailable path.
+
+    Action behaviour proper lives in test_actions.py; this only pins that a configured action
+    endpoint is wired up rather than answering 501.
+    """
+    response = await gateway.post("/pick", {"order": 3})
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "SERVICE_UNAVAILABLE"
 
 
 async def test_a_service_endpoint_is_served_and_reports_a_missing_server(

@@ -8,6 +8,18 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- Action endpoints are served, with all four routes: `POST` submits a goal and answers 202 with
+  its id, `GET` reads status, result and newest feedback, `GET .../stream` streams feedback and
+  then one terminal event before closing, and `DELETE` requests cancellation.
+- Goal registry with TTL eviction. A terminal goal stays queryable for `actions.result_ttl_s`
+  and then answers 404. Eviction is lazy -- a sweep on goal creation, the only way the registry
+  grows -- so there is no timer and an idle gateway does no work.
+- Goal ids are namespaced per endpoint, so two endpoints on the same action cannot read each
+  other's goals.
+- Feedback is encoded once per message and the same bytes are handed to every listener.
+- Preconditions gate goal submission only. Status, stream and cancel are deliberately not
+  gated: a state gate able to block a cancellation would be the opposite of a safety feature.
+
 - Service endpoints are served. A call returns the response in the documented envelope; no
   server gives `SERVICE_UNAVAILABLE` and a slow one gives `TIMEOUT`, both as HTTP 200 because
   the request itself was fine. A timed-out request is withdrawn, so a late reply cannot be

@@ -31,6 +31,7 @@ from .resolve import ResolvedConfig
 _LOG = logging.getLogger(__name__)
 
 __all__ = [
+    "ActionUnavailableError",
     "RosRuntime",
     "ServiceTimeoutError",
     "ServiceUnavailableError",
@@ -45,6 +46,10 @@ class ServiceUnavailableError(RuntimeError):
 
 class ServiceTimeoutError(RuntimeError):
     """The service did not answer within the endpoint's timeout."""
+
+
+class ActionUnavailableError(RuntimeError):
+    """No action server is offering the action this endpoint points at."""
 
 
 _NODE_NAME: Final = "ros2_http_gateway"
@@ -141,6 +146,7 @@ class RosRuntime:
     """
 
     __slots__ = (
+        "_action_clients",
         "_clients",
         "_context",
         "_executor",
@@ -162,6 +168,7 @@ class RosRuntime:
         self.caches: dict[str, TopicCache] = {}
         self._publishers: dict[str, Any] = {}
         self._clients: dict[str, Any] = {}
+        self._action_clients: dict[str, Any] = {}
         self._subscribed: dict[str, str] = {}
         self._context: Any = None
         self._node: Any = None
@@ -242,6 +249,22 @@ class RosRuntime:
                 )
                 _LOG.info(
                     "service client %s <- %s [%s]", endpoint.ros_name, path, endpoint.type_name
+                )
+            elif endpoint.config.kind == "action":
+                from rclpy.action import ActionClient
+                from rclpy.callback_groups import ReentrantCallbackGroup
+
+                # Reentrant, not mutually exclusive: a goal's feedback, status and result
+                # callbacks overlap, and serialising them against one another deadlocks the
+                # result future behind feedback that is still arriving.
+                self._action_clients[path] = ActionClient(
+                    self._node,
+                    endpoint.interface,
+                    endpoint.ros_name,
+                    callback_group=ReentrantCallbackGroup(),
+                )
+                _LOG.info(
+                    "action client %s <- %s [%s]", endpoint.ros_name, path, endpoint.type_name
                 )
 
         try:
@@ -335,6 +358,51 @@ class RosRuntime:
         except asyncio.TimeoutError:
             client.remove_pending_request(ros_future)
             raise ServiceTimeoutError(path) from None
+
+    def action_server_is_ready(self, path: str) -> bool:
+        """Whether an action server is currently offering this endpoint's action."""
+        ready: bool = self._action_clients[path].server_is_ready()
+        return ready
+
+    async def send_goal(self, path: str, goal: Any, feedback: Any = None) -> Any:
+        """Submit a goal and wait for the server to accept or reject it.
+
+        Args:
+            path: The endpoint key, which selects the client.
+            goal: The goal message.
+            feedback: Callback for feedback messages. Invoked on a ROS thread.
+
+        Returns:
+            The goal handle. ``handle.accepted`` says whether the server took it.
+
+        Raises:
+            ActionUnavailableError: If no server is offering the action.
+        """
+        client = self._action_clients[path]
+        if not client.server_is_ready():
+            raise ActionUnavailableError(path)
+        return await self._bridge(client.send_goal_async(goal, feedback_callback=feedback))
+
+    async def goal_result(self, handle: Any) -> Any:
+        """Wait for a goal to finish. No timeout: an action is long-running by definition."""
+        return await self._bridge(handle.get_result_async())
+
+    async def cancel_goal(self, handle: Any) -> Any:
+        """Ask the server to cancel a goal and wait for its answer."""
+        return await self._bridge(handle.cancel_goal_async())
+
+    async def _bridge(self, ros_future: Any) -> Any:
+        """Await an rclpy future on the event loop.
+
+        rclpy futures are not awaitable, so the outcome is carried across by a done callback
+        that schedules it onto the loop. Verified under both executors.
+        """
+        loop = asyncio.get_running_loop()
+        settled: asyncio.Future[Any] = loop.create_future()
+        ros_future.add_done_callback(
+            lambda future: loop.call_soon_threadsafe(_settle, settled, future)
+        )
+        return await settled
 
     def stop(self) -> None:
         """Stop spinning, drain the publish queue and destroy the node."""

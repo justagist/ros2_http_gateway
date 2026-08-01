@@ -184,7 +184,27 @@ An action endpoint at `/pick` generates four routes.
 
 `status` is one of `accepted`, `executing`, `canceling`, `succeeded`, `aborted`,
 `canceled`. A terminal goal stays queryable for `actions.result_ttl_s` (default 300) and
-then returns 404.
+then returns 404 with `UNKNOWN_GOAL`, the same as an id that never existed.
+
+Goal ids are namespaced per endpoint: two endpoints pointing at the same action do not share
+them, so an id from one cannot be read through the other's routes.
+
+`SERVICE_UNAVAILABLE` when no action server is offering the action; `GOAL_REJECTED` when one is
+and refuses the goal. Neither leaves a record behind, so no id is returned.
+
+Cancel answers `200 {"success": true}` once the server accepts the request; the goal then moves
+to `canceling` and reaches `canceled` when the server confirms. `CANCEL_REJECTED` if the server
+declines, `ALREADY_TERMINAL` if it has already finished.
+
+**Preconditions apply only to goal submission.** Status, stream and cancel are not gated. A
+state gate able to stop an operator cancelling a goal would be the opposite of a safety
+feature.
+
+`timeout_ms` bounds the accept/reject handshake, not the goal. An action is long-running by
+definition, so there is no deadline on its result.
+
+The per-goal stream keeps a bounded backlog per client. A client that cannot keep up loses its
+oldest queued feedback rather than stalling the goal; ordering is preserved.
 
 Because a derived route could otherwise be shadowed, a config where another endpoint would
 collide with `/pick/{goal_id}` is rejected at startup.

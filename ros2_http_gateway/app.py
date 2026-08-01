@@ -11,17 +11,19 @@ into ROS, 200 means it did and the body carries the outcome. Both use one envelo
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any, Final
 
 import orjson
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
+from .actions import GoalRecord, GoalRegistry, encode_feedback, status_name, terminal_frame
 from .audit import AuditLogger, Decision
 from .auth import (
     BAD_CREDENTIAL,
@@ -35,7 +37,12 @@ from .codegen import ConversionError
 from .params import apply_bindings
 from .policy import PolicyEngine, build_policy
 from .resolve import ResolvedConfig, ResolvedEndpoint
-from .runtime import RosRuntime, ServiceTimeoutError, ServiceUnavailableError
+from .runtime import (
+    ActionUnavailableError,
+    RosRuntime,
+    ServiceTimeoutError,
+    ServiceUnavailableError,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -44,10 +51,12 @@ __all__ = ["build_app"]
 _JSON: Final = "application/json"
 _ORJSON_OPTS: Final = orjson.OPT_SERIALIZE_NUMPY
 
-# Action endpoints are configured, validated and routed, but answering them lands in the next
-# phase; a 501 saying so beats a 404 that looks like a config mistake.
-_NOT_IMPLEMENTED: Final = {
-    "action": "action endpoints are answered from phase 4",
+_SSE_HEADERS: Final = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    # Squarely aimed at nginx, which buffers a streaming response by default and would hold
+    # feedback until the goal finished.
+    "X-Accel-Buffering": "no",
 }
 
 Handler = Callable[[Request], Awaitable[Response]]
@@ -113,10 +122,13 @@ def build_app(
         {path: e.config.preconditions for path, e in resolved.endpoints.items()},
         runtime.caches,
     )
+    goals = GoalRegistry(resolved.config.actions.result_ttl_s)
     base = resolved.config.http.base_path
     routes = [Route(f"{base}/health", _health(resolved, runtime), methods=["GET"])]
-    routes.extend(_endpoint_routes(resolved, runtime, audit, authenticator, policy, base))
-    return Starlette(routes=routes, lifespan=lifespan)
+    routes.extend(_endpoint_routes(resolved, runtime, audit, authenticator, policy, goals, base))
+    app = Starlette(routes=routes, lifespan=lifespan)
+    app.state.goals = goals
+    return app
 
 
 def _endpoint_routes(
@@ -125,6 +137,7 @@ def _endpoint_routes(
     audit: AuditLogger,
     authenticator: Authenticator,
     policy: PolicyEngine,
+    goals: GoalRegistry,
     base: str,
 ) -> Iterator[Route]:
     """Yield one route per configured endpoint, most specific path first.
@@ -138,9 +151,51 @@ def _endpoint_routes(
         key=lambda item: (item[1].config.path.count("{"), item[0]),
     )
     for path, endpoint in ordered:
+        if endpoint.config.kind == "action":
+            yield from _action_routes(endpoint, runtime, audit, authenticator, policy, goals, base)
+            continue
         handler = _endpoint_handler(endpoint, runtime)
         guarded = _guard(handler, endpoint, audit, authenticator, policy)
         yield Route(f"{base}{path}", guarded, methods=[endpoint.config.method])
+
+
+def _action_routes(
+    endpoint: ResolvedEndpoint,
+    runtime: RosRuntime,
+    audit: AuditLogger,
+    authenticator: Authenticator,
+    policy: PolicyEngine,
+    goals: GoalRegistry,
+    base: str,
+) -> Iterator[Route]:
+    """The four routes an action endpoint generates.
+
+    Only the submit route is subject to preconditions. Applying them to cancel would let a
+    state gate stop an operator aborting a goal, which is precisely backwards; status and
+    stream change nothing.
+    """
+    path = endpoint.config.path
+    empty = PolicyEngine({})
+
+    def guard(handler: Handler, with_policy: PolicyEngine) -> Handler:
+        return _guard(handler, endpoint, audit, authenticator, with_policy)
+
+    yield Route(
+        f"{base}{path}", guard(_goal_submit(endpoint, runtime, goals), policy), methods=["POST"]
+    )
+    yield Route(
+        f"{base}{path}/{{goal_id}}", guard(_goal_status(endpoint, goals), empty), methods=["GET"]
+    )
+    yield Route(
+        f"{base}{path}/{{goal_id}}/stream",
+        guard(_goal_stream(endpoint, goals), empty),
+        methods=["GET"],
+    )
+    yield Route(
+        f"{base}{path}/{{goal_id}}",
+        guard(_goal_cancel(endpoint, runtime, goals), empty),
+        methods=["DELETE"],
+    )
 
 
 def _health(resolved: ResolvedConfig, runtime: RosRuntime) -> Handler:
@@ -249,9 +304,7 @@ def _endpoint_handler(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handle
         return _topic_read(endpoint, runtime)
     if endpoint.config.is_topic_write:
         return _topic_write(endpoint, runtime)
-    if endpoint.config.kind == "service":
-        return _service_call(endpoint, runtime)
-    return _not_implemented(endpoint)
+    return _service_call(endpoint, runtime)
 
 
 def _service_call(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
@@ -362,11 +415,165 @@ def _topic_write(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
     return write
 
 
-def _not_implemented(endpoint: ResolvedEndpoint) -> Handler:
-    """Answer a configured-but-not-yet-served endpoint honestly."""
-    message = _NOT_IMPLEMENTED[endpoint.config.kind]
+# --------------------------------------------------------------------------------------
+# actions
+# --------------------------------------------------------------------------------------
 
-    async def unimplemented(_: Request) -> Response:
-        return _error(501, "NOT_IMPLEMENTED", message)
 
-    return unimplemented
+def _goal_submit(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalRegistry) -> Handler:
+    """POST a goal. 202 with its id once the server accepts it.
+
+    202 rather than 200 because the work has been accepted and not performed; the id is the
+    client's handle on it. A server that refuses the goal is a 200 with ``GOAL_REJECTED``: the
+    request was fine and reached ROS, which answered no.
+    """
+    path = endpoint.config.path
+    from_dict = endpoint.from_dict
+    feedback_to_dict = endpoint.feedback_to_dict
+    result_to_dict = endpoint.result_to_dict
+    assert from_dict is not None and feedback_to_dict is not None and result_to_dict is not None
+
+    async def submit(request: Request) -> Response:
+        raw = await request.body()
+        try:
+            payload = orjson.loads(raw) if raw else {}
+        except orjson.JSONDecodeError as exc:
+            return _error(400, "BAD_REQUEST", f"body is not valid JSON: {exc}")
+        if not isinstance(payload, dict):
+            return _error(400, "BAD_REQUEST", "body must be a JSON object")
+        try:
+            goal = from_dict(payload)
+        except ConversionError as exc:
+            return _error(400, "BAD_REQUEST", str(exc), field=exc.field)
+
+        loop = asyncio.get_running_loop()
+        record = goals.create(path)
+
+        def on_feedback(message: Any) -> None:
+            # A ROS callback thread. Encoding happens here, once per message however many
+            # listeners there are; only the handover is scheduled onto the loop.
+            encoded = encode_feedback(feedback_to_dict, message)
+            loop.call_soon_threadsafe(goals.on_feedback, record, encoded)
+
+        try:
+            handle = await runtime.send_goal(path, goal, on_feedback)
+        except ActionUnavailableError:
+            goals.discard(record)
+            return _envelope(
+                200, "SERVICE_UNAVAILABLE", f"no server is offering {endpoint.ros_name}"
+            )
+
+        if not handle.accepted:
+            goals.discard(record)
+            return _envelope(200, "GOAL_REJECTED", f"{endpoint.ros_name} refused the goal")
+
+        record.handle = handle
+        record.status = "accepted"
+        record.result_task = asyncio.create_task(
+            _await_result(goals, record, runtime, result_to_dict),
+            name=f"goal-result-{record.goal_id}",
+        )
+        return _json({"goal_id": record.goal_id}, 202)
+
+    return submit
+
+
+async def _await_result(
+    goals: GoalRegistry,
+    record: GoalRecord,
+    runtime: RosRuntime,
+    result_to_dict: Callable[[Any], dict[str, Any]],
+) -> None:
+    """Wait for a goal to finish, then record it and close its streams.
+
+    Held on the record so the task is not garbage collected mid-flight, which is the classic
+    way a fire-and-forget asyncio task disappears.
+    """
+    try:
+        outcome = await runtime.goal_result(record.handle)
+    except Exception:
+        _LOG.exception("waiting for the result of %s failed", record.goal_id)
+        goals.on_terminal(record, "aborted", None)
+        return
+    encoded = orjson.dumps(result_to_dict(outcome.result), option=_ORJSON_OPTS)
+    goals.on_terminal(record, status_name(outcome.status), encoded)
+
+
+def _goal_status(endpoint: ResolvedEndpoint, goals: GoalRegistry) -> Handler:
+    """GET the status, result and newest feedback of a goal."""
+    path = endpoint.config.path
+
+    async def status(request: Request) -> Response:
+        record = goals.get(path, request.path_params["goal_id"])
+        if record is None:
+            return _error(404, "UNKNOWN_GOAL", "no such goal, or its result has been evicted")
+        return Response(record.status_body(), 200, media_type=_JSON)
+
+    return status
+
+
+def _goal_stream(endpoint: ResolvedEndpoint, goals: GoalRegistry) -> Handler:
+    """Stream a goal's feedback, then one terminal event, then close."""
+    path = endpoint.config.path
+
+    async def stream(request: Request) -> Response:
+        record = goals.get(path, request.path_params["goal_id"])
+        if record is None:
+            return _error(404, "UNKNOWN_GOAL", "no such goal, or its result has been evicted")
+
+        if record.is_terminal:
+            # Nothing more will ever arrive, so answer with the ending and be done.
+            return StreamingResponse(
+                _single_frame(terminal_frame(record.status, record.result)),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
+
+        queue = goals.subscribe(record)
+
+        async def frames() -> AsyncIterator[bytes]:
+            try:
+                while True:
+                    frame = await queue.get()
+                    if frame is None:  # the sentinel written by on_terminal
+                        return
+                    yield frame
+            finally:
+                goals.unsubscribe(record, queue)
+
+        return StreamingResponse(frames(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+    return stream
+
+
+async def _single_frame(frame: bytes) -> AsyncIterator[bytes]:
+    yield frame
+
+
+def _goal_cancel(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalRegistry) -> Handler:
+    """DELETE a goal: ask the server to cancel it.
+
+    Deliberately not gated by preconditions. A state gate that could stop an operator aborting
+    a goal would be the opposite of a safety feature.
+    """
+    path = endpoint.config.path
+
+    async def cancel(request: Request) -> Response:
+        record = goals.get(path, request.path_params["goal_id"])
+        if record is None:
+            return _error(404, "UNKNOWN_GOAL", "no such goal, or its result has been evicted")
+        if record.is_terminal:
+            return _envelope(200, "ALREADY_TERMINAL", f"this goal has already {record.status}")
+
+        response = await runtime.cancel_goal(record.handle)
+        accepted = bool(response.goals_canceling)
+        if accepted:
+            record.status = "canceling"
+            return _json({"success": True, "message": "cancellation requested", "error_code": None})
+        return _envelope(
+            200,
+            "CANCEL_REJECTED",
+            f"{endpoint.ros_name} would not cancel this goal (return code {response.return_code})",
+        )
+
+    return cancel
