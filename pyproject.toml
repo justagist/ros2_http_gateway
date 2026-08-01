@@ -121,12 +121,11 @@ known-local-folder = ["ros_fixtures"]
 "ros2_http_gateway/codegen.py" = ["E501"]
 
 [tool.mypy]
-# Not our 3.10 floor, on purpose. numpy's bundled stubs use PEP 695 `type` statements,
-# which mypy refuses to parse under an older target, and neither follow_imports = "skip"
-# nor ignore_errors suppresses a syntax error inside a stub. The 3.10 floor is enforced
-# instead by ruff's target-version = "py310" for syntax and feature use, and by the py3.10
-# leg of CI actually importing and running the whole suite.
-python_version = "3.12"
+# The real floor, so that using something Humble's 3.10 does not have is a type error here
+# rather than an ImportError in CI. numpy's own stubs cannot be parsed under this target
+# (they use PEP 695 syntax), so typings/numpy shadows them; see the note in that file.
+python_version = "3.10"
+mypy_path = "typings"
 strict = true
 warn_unreachable = true
 # rclpy and the ROS interface packages ship no type information.

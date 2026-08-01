@@ -93,6 +93,10 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- `datetime.UTC` in the audit timestamp broke Python 3.10, which is what Humble ships; now
+  `timezone.utc`. mypy is configured to target the 3.10 floor again (with numpy's PEP 695
+  stubs shadowed by a local shim) so this class of mistake is a type error rather than an
+  ImportError in CI.
 - The ROS node is destroyed on shutdown. It was not: uvicorn restores the default signal
   handler and re-raises the captured signal as `run()` unwinds, so teardown placed after
   that call never executed. Teardown now happens in the lifespan, which is also the correct

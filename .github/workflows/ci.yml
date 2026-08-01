@@ -11,12 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Style and types once, not per interpreter. mypy parses stubs with the host
-  # interpreter's ast, and numpy's bundled stubs use PEP 695 `type` statements that a 3.10
-  # or 3.11 host cannot parse at all, so running mypy across the version matrix fails on
-  # the dependency rather than on this package. The 3.10 floor is still enforced: ruff's
-  # target-version = "py310" covers syntax and feature use, and the unit job below actually
-  # imports and runs everything on 3.10.
+  # Style and types once, not per interpreter: mypy is configured to target the 3.10 floor
+  # regardless of the interpreter it runs on, so checking under several buys nothing. The
+  # target matters -- it is what makes using something Humble's 3.10 lacks a type error here
+  # instead of an ImportError two jobs later.
   lint-type:
     name: ruff + mypy
     runs-on: ubuntu-latest

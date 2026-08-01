@@ -19,7 +19,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import IO, Any, Final
 
 import orjson
@@ -111,7 +111,11 @@ class AuditLogger:
             outcome: ``ok`` or the ``error_code`` the client was given.
         """
         entry: dict[str, Any] = {
-            "ts": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            # timezone.utc rather than datetime.UTC: the latter arrived in 3.11 and Humble
+            # ships 3.10.
+            "ts": datetime.now(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z"),
             "user": user,
             "roles": sorted(roles) if roles else [],
             "method": method,
