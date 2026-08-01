@@ -63,8 +63,12 @@ entirely, so dependencies and extras are silently skipped.
 cd ~/ws/src && git clone https://github.com/justagist/ros2_http_gateway.git
 cd ~/ws && colcon build --packages-select ros2_http_gateway
 source install/setup.bash
-ros2 run ros2_http_gateway gateway --help
+ros2 run ros2_http_gateway ros2-http-gateway --help
 ```
+
+There is deliberately no shorter `gateway` alias: console scripts are generated from the
+same entry points for wheel installs, so an alias would claim `~/.local/bin/gateway` on
+every `pip install`. Typing the full name beats grabbing a generic one.
 
 ## Quickstart
 

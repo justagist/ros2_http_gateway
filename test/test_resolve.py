@@ -326,6 +326,28 @@ def test_online_verification_covers_services_and_actions(
     assert "endpoints./call" in message and "std_srvs/srv/Trigger" in message
 
 
+def test_only_the_graph_apis_with_pending_lookups_are_queried(
+    tmp_path: Path, fake_actions: None
+) -> None:
+    """A config of topics should not poll the service and action graphs ten times a second."""
+    queried: list[str] = []
+
+    class Spy(FakeGraph):
+        def get_topic_names_and_types(self) -> list[tuple[str, list[str]]]:
+            queried.append("topic")
+            return super().get_topic_names_and_types()
+
+        def get_service_names_and_types(self) -> list[tuple[str, list[str]]]:
+            queried.append("service")
+            return super().get_service_names_and_types()
+
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"] = {"/state": {"topic": "/mission/state", "roles": ["viewer"]}}
+    graph = Spy(topics={"/mission/state": ["example_interfaces/msg/String"]})
+    resolve(load(tmp_path, document), node=graph, discovery_timeout=0.0)
+    assert set(queried) == {"topic"}
+
+
 # --------------------------------------------------------------------------------------
 # precondition fields
 # --------------------------------------------------------------------------------------

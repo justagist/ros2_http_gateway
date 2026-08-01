@@ -19,10 +19,10 @@ import json
 import logging
 import re
 import stat
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, NamedTuple
 
 import jsonschema
 import yaml
@@ -41,6 +41,15 @@ DEFAULT_RESULT_TTL_S: Final = 300.0
 
 _PARAM_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _WILDCARD: Final = "*"
+
+# Served unconditionally under http.base_path, so an endpoint cannot be configured at one.
+# Listed here rather than discovered later so a collision fails at startup, not at the
+# first request.
+_BUILT_IN_ROUTES: Final = (
+    ("GET", "/health", "health"),
+    ("GET", "/openapi.json", "OpenAPI document"),
+    ("GET", "/docs", "Swagger UI"),
+)
 
 Kind = Literal["topic", "service", "action"]
 Method = Literal["GET", "POST"]
@@ -264,9 +273,19 @@ def _pointer(parts: Iterable[Any]) -> str:
 
 
 def _schema_message(error: jsonschema.ValidationError) -> str:
-    """Turn a schema error into something a config author can act on."""
-    if error.validator == "oneOf" and error.schema_path and "endpoint" in str(error.schema_path):
-        return "must name exactly one of topic, service or action"
+    """Turn a schema error into something a config author can act on.
+
+    The oneOf cases are matched on the document location of the failure rather than by
+    looking for a substring in the schema path, so that reshuffling the schema internals
+    cannot silently turn a helpful message back into "is not valid under any of the given
+    schemas".
+    """
+    path = list(error.absolute_path)
+    if error.validator == "oneOf":
+        if len(path) == 2 and path[0] == "endpoints":
+            return "must name exactly one of topic, service or action"
+        if len(path) == 3 and path[:2] == ["auth", "tokens"]:
+            return "must give exactly one of token or token_sha256"
     if error.validator == "additionalProperties":
         return f"{error.message} (check the spelling; unknown keys are never ignored)"
     return str(error.message)
@@ -496,19 +515,27 @@ class _Builder:
                 "endpoint has a cached sample to read",
             )
 
-    def action_route_conflicts(self, endpoints: Mapping[str, EndpointConfig]) -> None:
-        """Reject configs where a derived action route would shadow another endpoint."""
-        for path, endpoint in endpoints.items():
-            if endpoint.kind != "action":
-                continue
-            for derived in (f"{path}/{{goal_id}}", f"{path}/{{goal_id}}/stream"):
-                for other, other_endpoint in endpoints.items():
-                    if other != path and _templates_overlap(derived, other):
-                        self.fail(
-                            f"endpoints.{path}",
-                            f"its generated action route {derived} would shadow "
-                            f"endpoints.{other} ({other_endpoint.kind})",
-                        )
+    def route_conflicts(self, endpoints: Mapping[str, EndpointConfig]) -> None:
+        """Reject any two routes that could match the same request.
+
+        Not just the generated action subroutes: ``/a/{x}`` and ``/a/{y}`` on the same
+        method are indistinguishable, and so are a literal and a template that covers it
+        (``/mission/status`` versus ``/mission/{command}``). Left undetected, which of them
+        answers a request would come down to route registration order, which is exactly the
+        class of surprise this config engine exists to remove.
+        """
+        routes = list(_all_routes(endpoints, self.document.get("sse")))
+        for index, earlier in enumerate(routes):
+            for later in routes[index + 1 :]:
+                if earlier.method != later.method:
+                    continue
+                if not _templates_overlap(earlier.template, later.template):
+                    continue
+                self.fail(
+                    later.where,
+                    f"{later.description} can match the same request as "
+                    f"{earlier.description}; give them different paths or methods",
+                )
 
     def tokens(self) -> tuple[TokenConfig, ...]:
         """Hash plaintext tokens, refusing outright if the file is world-readable."""
@@ -548,15 +575,12 @@ class _Builder:
             )
         return tuple(built)
 
-    def sse(self, endpoints: Mapping[str, EndpointConfig]) -> SseConfig | None:
+    def sse(self) -> SseConfig | None:
         raw = self.document.get("sse")
         if not raw:
             return None
-        path = raw.get("path", DEFAULT_SSE_PATH)
-        if path in endpoints:
-            self.fail("sse.path", f"{path} is also configured as an endpoint")
         return SseConfig(
-            path=path,
+            path=raw.get("path", DEFAULT_SSE_PATH),
             include=tuple(raw["include"]),
             overflow=raw.get("overflow", "drop_oldest"),
             max_clients=raw.get("max_clients", DEFAULT_MAX_CLIENTS),
@@ -584,9 +608,9 @@ def _build(source: Path, document: Mapping[str, Any]) -> GatewayConfig:
     builder = _Builder(source, document)
     endpoints = builder.endpoints()
     builder.cross_references(endpoints)
-    builder.action_route_conflicts(endpoints)
+    builder.route_conflicts(endpoints)
     tokens = builder.tokens()
-    sse = builder.sse(endpoints)
+    sse = builder.sse()
     http = builder.http()
     audit = builder.audit()
 
@@ -607,6 +631,45 @@ def _build(source: Path, document: Mapping[str, Any]) -> GatewayConfig:
         json=JsonConfig(int64_as_string=json_raw.get("int64_as_string", True)),
         sse=sse,
     )
+
+
+class _Route(NamedTuple):
+    """One HTTP route the gateway will serve, for collision checking."""
+
+    method: str
+    template: str
+    where: str
+    description: str
+
+
+def _all_routes(
+    endpoints: Mapping[str, EndpointConfig], sse: Mapping[str, Any] | None
+) -> Iterator[_Route]:
+    """Yield every route the gateway serves, configured, generated or built in.
+
+    Built-in routes come first so that a configured endpoint colliding with one is the side
+    that gets blamed.
+    """
+    for method, template, name in _BUILT_IN_ROUTES:
+        yield _Route(method, template, "endpoints", f"the built-in {name} route {template}")
+
+    for path, endpoint in endpoints.items():
+        where = f"endpoints.{path}"
+        yield _Route(endpoint.method, path, where, f"{endpoint.method} {path}")
+        if endpoint.kind != "action":
+            continue
+        # Derived by the action protocol rather than written by the config author, which is
+        # exactly why a collision with one needs pointing out.
+        for method, template in (
+            ("GET", f"{path}/{{goal_id}}"),
+            ("DELETE", f"{path}/{{goal_id}}"),
+            ("GET", f"{path}/{{goal_id}}/stream"),
+        ):
+            yield _Route(method, template, where, f"its generated action route {method} {template}")
+
+    if sse:
+        path = sse.get("path", DEFAULT_SSE_PATH)
+        yield _Route("GET", path, "sse.path", f"the event stream GET {path}")
 
 
 def _path_params(path: str) -> tuple[str, ...]:

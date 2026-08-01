@@ -31,6 +31,14 @@ the file. A machine-readable JSON Schema for the whole format ships inside the p
 Unknown keys are always an error, never ignored. A typo in a security-relevant key must
 not fail open.
 
+Two routes that could answer the same request are also an error. `/a/{x}` and `/a/{y}` on
+the same method are indistinguishable, and so are `/mission/status` and `/mission/{command}`
+if both are `GET`; which one won would otherwise depend on registration order. The same check
+covers `sse.path`, the routes generated for an action endpoint (`/pick/{goal_id}` and
+`/pick/{goal_id}/stream`), and the built-in `GET /health`, `GET /openapi.json` and
+`GET /docs`. Differing methods are fine: a topic `GET` at `/mission/status` beside a service
+`POST` at `/mission/{command}` is unambiguous.
+
 ## `endpoints`
 
 The key is the HTTP path, relative to `http.base_path`. Path parameters use
@@ -238,9 +246,23 @@ number regardless, since a path parameter is always a string.
 
 On the way in, a field that is absent keeps the default from the ROS message definition.
 An **unknown** field is rejected rather than ignored, because silently dropping a
-misspelled field is how an operator ends up believing a command was applied. Ranges,
-fixed array lengths and sequence bounds are all enforced, and a violation returns HTTP 400
-quoting the dotted path of the field:
+misspelled field is how an operator ends up believing a command was applied.
+
+Bodies are read strictly: a JSON number must be a number and a JSON boolean must be a
+boolean. `"1.5"` is not a double. The exceptions both exist so that a body this gateway
+produced is a body it will accept:
+
+- `int64`/`uint64` accept a string as well as a number, because `int64_as_string` emits one.
+- `float32`/`float64` accept `null`, read back as NaN. Not lossless the other way: an
+  infinity read as `null` returns as NaN.
+
+Path parameters are always strings, and are coerced against the field they target before
+reaching the converter, rather than by loosening every scalar. That is what keeps the
+generated JSON Schemas usable: they never have to tell a client that any number anywhere
+might arrive as text.
+
+Ranges, fixed array lengths and sequence bounds are all enforced, and a violation returns
+HTTP 400 quoting the dotted path of the field:
 
 ```json
 {

@@ -8,8 +8,6 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from ros2_http_gateway._version import __version__
 
 if sys.version_info >= (3, 11):
@@ -89,14 +87,20 @@ def test_console_scripts_install_where_ros2_run_looks() -> None:
     assert "install_scripts = $base/lib/ros2_http_gateway" in cfg
 
 
-@pytest.mark.parametrize("script", ["ros2-http-gateway", "gateway"])
-def test_console_scripts_declared(script: str) -> None:
-    """Both names are needed: the CLI name, and `ros2 run ros2_http_gateway gateway`."""
-    scripts = _pyproject()["project"]["scripts"]
-    assert scripts[script] == "ros2_http_gateway.cli:main"
+def test_exactly_one_console_script_and_it_is_namespaced() -> None:
+    """A bare `gateway` alias would claim ~/.local/bin/gateway on every pip install.
 
-    # setup.py carries the same entry points for the ament install path.
-    assert f"{script} = " in (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    Wheel installs generate console scripts from these same entry points, and setup.cfg's
+    install_scripts redirect only applies to the colcon/setup.py path. So the alias cannot
+    exist without grabbing a generic name on the user's PATH.
+    """
+    scripts = _pyproject()["project"]["scripts"]
+    assert scripts == {"ros2-http-gateway": "ros2_http_gateway.cli:main"}
+
+    # setup.py carries the same single entry point for the ament install path.
+    setup_py = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    assert "ros2-http-gateway = " in setup_py
+    assert '"gateway = ' not in setup_py and 'f"gateway = ' not in setup_py
 
 
 def test_every_runtime_dependency_carries_a_justification() -> None:

@@ -28,7 +28,17 @@ What the JSON encoding looks like, and why:
   formatting depended on how many elements happened to be in the sequence would be a
   hostile API, and fixed-size ``float32[N]`` already emits the numpy form.
 * ``float``/``double`` NaN and infinities become JSON ``null``, which is what orjson
-  does; ROS has no other way to spell them in JSON.
+  does; ROS has no other way to spell them in JSON. On the way in ``null`` reads back as
+  NaN, so a body this gateway produced is always a body it accepts. Not lossless in that
+  direction: an infinity read as ``null`` returns as NaN.
+
+Reading a body is otherwise strict, deliberately: a JSON number must be a number and a JSON
+boolean must be a boolean. The single exception is ``int64``/``uint64``, which accept a
+string because ``int64_as_string`` emits one. Path parameters are strings, and are coerced
+against their target field before reaching a converter rather than by loosening every
+scalar -- otherwise the generated JSON Schemas would have to advertise that any number in
+any request body may be a string, and an OpenAPI-validating client would be entitled to send
+one.
 
 Measured on Jazzy, and the reason this file does not trust introspection at runtime:
 rclpy gives numpy arrays for fixed-size numeric arrays, ``array.array`` for numeric
@@ -100,8 +110,11 @@ _NUMERIC: Final[dict[str, tuple[str, str, tuple[int, int] | None]]] = {
     "double": ("float64", "d", None),
     "int8": ("int8", "b", (-(2**7), 2**7 - 1)),
     "uint8": ("uint8", "B", (0, 2**8 - 1)),
+    # `char` in a .msg file becomes IDL uint8, which test_msgs exercises and a test pins.
+    # Raw-IDL `wchar` is deliberately absent: 16 bits wide, no interface in the battery has
+    # one, so its Python representation is unverified. Guessing it is how you ship a
+    # converter that looks right and is not.
     "char": ("uint8", "B", (0, 2**8 - 1)),
-    "wchar": ("uint16", "H", (0, 2**16 - 1)),
     "int16": ("int16", "h", (-(2**15), 2**15 - 1)),
     "uint16": ("uint16", "H", (0, 2**16 - 1)),
     "int32": ("int32", "i", (-(2**31), 2**31 - 1)),
@@ -329,6 +342,7 @@ class _ToMsgEmitter:
             "_MISS": _MISS,
             "_to_bool": _to_bool,
             "_to_int": _to_int,
+            "_to_wide_int": _to_wide_int,
             "_to_float": _to_float,
             "_to_str": _to_str,
             "_to_octet": _to_octet,
@@ -418,7 +432,8 @@ class _ToMsgEmitter:
         if spec is None or spec[2] is None:
             raise UnsupportedFieldError(f"no JSON decoding for basic type {typename!r}")
         low, high = spec[2]
-        return f"_to_int({expr}, {low}, {high}, {where!r})"
+        coercer = "_to_wide_int" if typename in _WIDE_INTS else "_to_int"
+        return f"{coercer}({expr}, {low}, {high}, {where!r})"
 
     def _collection(self, slot: AbstractNestedType, expr: str, where: str) -> str:
         value = slot.value_type
@@ -444,16 +459,20 @@ class _ToMsgEmitter:
             return f"_octet_list({expr}, {size}, {maximum}, {where!r})"
         if name in _BYTE_LIKE:
             if isinstance(slot, Array):
-                return f"_np.frombuffer({raw}, dtype=_np.uint8)"
+                # .copy() because frombuffer over bytes yields a read-only array, and
+                # anything that later mutates the message in place would hit an opaque
+                # "assignment destination is read-only". Cold path; one copy costs nothing.
+                return f"_np.frombuffer({raw}, dtype=_np.uint8).copy()"
             return f"_arr('B', {raw})"
         if name == "boolean":
             return self._comprehension(f"_to_bool({{item}}, {item!r})", guarded)
 
         dtype, code, bounds = _NUMERIC[name]
+        coercer = "_to_wide_int" if name in _WIDE_INTS else "_to_int"
         element = (
             f"_to_float({{item}}, {item!r})"
             if bounds is None
-            else f"_to_int({{item}}, {bounds[0]}, {bounds[1]}, {item!r})"
+            else f"{coercer}({{item}}, {bounds[0]}, {bounds[1]}, {item!r})"
         )
         items = self._comprehension(element, guarded)
         if isinstance(slot, Array):
@@ -543,16 +562,24 @@ _MISS: Final = _Missing()
 def _to_bool(value: Any, where: str) -> bool:
     if isinstance(value, bool):
         return value
-    if isinstance(value, str):
-        lowered = value.lower()
-        if lowered in ("true", "1"):
-            return True
-        if lowered in ("false", "0"):
-            return False
     raise ConversionError(f"{where}: expected a boolean, got {value!r}", field=where)
 
 
 def _to_int(value: Any, low: int, high: int, where: str) -> int:
+    """Coerce a JSON integer. A string is not one, whatever it happens to contain."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConversionError(f"{where}: expected an integer, got {value!r}", field=where)
+    if not low <= value <= high:
+        raise ConversionError(f"{where}: {value} is outside [{low}, {high}]", field=where)
+    return value
+
+
+def _to_wide_int(value: Any, low: int, high: int, where: str) -> int:
+    """Coerce a 64-bit integer, which the read side may have written as a string.
+
+    The one scalar that accepts a string, and only because ``int64_as_string`` puts one
+    there: a body read from this gateway must be a legal body to send back to it.
+    """
     if isinstance(value, bool) or not isinstance(value, int | str):
         raise ConversionError(f"{where}: expected an integer, got {value!r}", field=where)
     try:
@@ -565,12 +592,17 @@ def _to_int(value: Any, low: int, high: int, where: str) -> int:
 
 
 def _to_float(value: Any, where: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
+    """Coerce a JSON number, reading null as NaN.
+
+    null is accepted because the read side emits it for NaN and the infinities, so
+    rejecting it would mean a body this gateway produced could not be sent back to it. Not
+    lossless in that direction: an infinity read as null returns as NaN.
+    """
+    if value is None:
+        return float("nan")
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConversionError(f"{where}: expected a number, got {value!r}", field=where)
-    try:
-        return float(value)
-    except ValueError:
-        raise ConversionError(f"{where}: expected a number, got {value!r}", field=where) from None
+    return float(value)
 
 
 def _to_str(value: Any, where: str) -> str:
@@ -591,7 +623,8 @@ def _bytes_of(value: Any, size: int | None, maximum: int | None, where: str) -> 
         except (ValueError, TypeError):
             raise ConversionError(f"{where}: expected base64, got {value!r}", field=where) from None
     elif isinstance(value, list):
-        raw = bytes(_to_int(item, 0, 255, where) for item in value)
+        item_where = f"{where}[]"
+        raw = bytes(_to_int(item, 0, 255, item_where) for item in value)
     else:
         raise ConversionError(
             f"{where}: expected a base64 string or a list of integers, got {value!r}", field=where

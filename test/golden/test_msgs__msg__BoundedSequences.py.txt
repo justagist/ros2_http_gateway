@@ -46,10 +46,10 @@ def _build1(_d):
         _m.uint32_value = _to_int(_v, 0, 4294967295, 'basic_types_values[].uint32_value')
     _v = _d.get('int64_value', _MISS)
     if _v is not _MISS:
-        _m.int64_value = _to_int(_v, -9223372036854775808, 9223372036854775807, 'basic_types_values[].int64_value')
+        _m.int64_value = _to_wide_int(_v, -9223372036854775808, 9223372036854775807, 'basic_types_values[].int64_value')
     _v = _d.get('uint64_value', _MISS)
     if _v is not _MISS:
-        _m.uint64_value = _to_int(_v, 0, 18446744073709551615, 'basic_types_values[].uint64_value')
+        _m.uint64_value = _to_wide_int(_v, 0, 18446744073709551615, 'basic_types_values[].uint64_value')
     return _m
 
 def _build2(_d):
@@ -105,10 +105,10 @@ def _build3(_d):
         _m.uint32_value = _to_int(_v, 0, 4294967295, 'defaults_values[].uint32_value')
     _v = _d.get('int64_value', _MISS)
     if _v is not _MISS:
-        _m.int64_value = _to_int(_v, -9223372036854775808, 9223372036854775807, 'defaults_values[].int64_value')
+        _m.int64_value = _to_wide_int(_v, -9223372036854775808, 9223372036854775807, 'defaults_values[].int64_value')
     _v = _d.get('uint64_value', _MISS)
     if _v is not _MISS:
-        _m.uint64_value = _to_int(_v, 0, 18446744073709551615, 'defaults_values[].uint64_value')
+        _m.uint64_value = _to_wide_int(_v, 0, 18446744073709551615, 'defaults_values[].uint64_value')
     return _m
 
 def _build0(_d):
@@ -154,10 +154,10 @@ def _build0(_d):
         _m.uint32_values = _arr('I', [_to_int(_j1, 0, 4294967295, 'uint32_values[]') for _j1 in _check_max(_v, 3, 'uint32_values')])
     _v = _d.get('int64_values', _MISS)
     if _v is not _MISS:
-        _m.int64_values = _arr('q', [_to_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values[]') for _j1 in _check_max(_v, 3, 'int64_values')])
+        _m.int64_values = _arr('q', [_to_wide_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values[]') for _j1 in _check_max(_v, 3, 'int64_values')])
     _v = _d.get('uint64_values', _MISS)
     if _v is not _MISS:
-        _m.uint64_values = _arr('Q', [_to_int(_j1, 0, 18446744073709551615, 'uint64_values[]') for _j1 in _check_max(_v, 3, 'uint64_values')])
+        _m.uint64_values = _arr('Q', [_to_wide_int(_j1, 0, 18446744073709551615, 'uint64_values[]') for _j1 in _check_max(_v, 3, 'uint64_values')])
     _v = _d.get('string_values', _MISS)
     if _v is not _MISS:
         _m.string_values = [_to_str(_j1, 'string_values[]') for _j1 in _check_max(_v, 3, 'string_values')]
@@ -205,10 +205,10 @@ def _build0(_d):
         _m.uint32_values_default = _arr('I', [_to_int(_j1, 0, 4294967295, 'uint32_values_default[]') for _j1 in _check_max(_v, 3, 'uint32_values_default')])
     _v = _d.get('int64_values_default', _MISS)
     if _v is not _MISS:
-        _m.int64_values_default = _arr('q', [_to_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values_default[]') for _j1 in _check_max(_v, 3, 'int64_values_default')])
+        _m.int64_values_default = _arr('q', [_to_wide_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values_default[]') for _j1 in _check_max(_v, 3, 'int64_values_default')])
     _v = _d.get('uint64_values_default', _MISS)
     if _v is not _MISS:
-        _m.uint64_values_default = _arr('Q', [_to_int(_j1, 0, 18446744073709551615, 'uint64_values_default[]') for _j1 in _check_max(_v, 3, 'uint64_values_default')])
+        _m.uint64_values_default = _arr('Q', [_to_wide_int(_j1, 0, 18446744073709551615, 'uint64_values_default[]') for _j1 in _check_max(_v, 3, 'uint64_values_default')])
     _v = _d.get('string_values_default', _MISS)
     if _v is not _MISS:
         _m.string_values_default = [_to_str(_j1, 'string_values_default[]') for _j1 in _check_max(_v, 3, 'string_values_default')]

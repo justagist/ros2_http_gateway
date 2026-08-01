@@ -261,18 +261,65 @@ def test_nan_and_infinity_encode_as_null() -> None:
     assert encoded["linear"]["y"] is None
 
 
-def test_path_parameter_strings_coerce_into_numeric_fields() -> None:
-    """Path parameters always arrive as strings; request_map targets must accept them."""
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("int32_value", "-5"),
+        ("uint8_value", "7"),
+        ("float64_value", "1.25"),
+        ("bool_value", "true"),
+        ("float64_value", "nan"),
+        ("float64_value", "inf"),
+    ],
+)
+def test_a_string_is_not_a_number_or_a_boolean_in_a_body(field: str, value: str) -> None:
+    """Keeps the write schemas honest.
+
+    Accepting "1.25" for a double would mean the generated JSON Schema had to advertise
+    ["number","string"] on every numeric field, and an OpenAPI-validating client would then
+    be entitled to send text where the schema says number. Path parameters are strings, and
+    are coerced against their target field before reaching a converter.
+    """
     cls = get_message("test_msgs/msg/BasicTypes")
-    built = build_dict_to_msg(cls)(
-        {"int32_value": "-5", "float64_value": "1.25", "bool_value": "true", "uint8_value": "7"}
-    )
-    assert (built.int32_value, built.float64_value, built.bool_value, built.uint8_value) == (
-        -5,
-        1.25,
-        True,
-        7,
-    )
+    with pytest.raises(ConversionError):
+        build_dict_to_msg(cls)({field: value})
+
+
+def test_wide_ints_still_accept_a_string_because_the_read_side_emits_one() -> None:
+    """The one deliberate exception, and the write schema says so."""
+    cls = get_message("test_msgs/msg/BasicTypes")
+    built = build_dict_to_msg(cls)({"int64_value": str(BIG_INT64), "uint64_value": 5})
+    assert (built.int64_value, built.uint64_value) == (BIG_INT64, 5)
+
+
+def test_wide_int_collections_accept_strings_too() -> None:
+    cls = get_message("std_msgs/msg/Int64MultiArray")
+    assert build_dict_to_msg(cls)({"data": [str(BIG_INT64), "-1"]}).data.tolist() == [
+        BIG_INT64,
+        -1,
+    ]
+
+
+def test_null_reads_back_as_nan_so_a_response_body_is_a_legal_request_body() -> None:
+    """The read side writes null for NaN, so the write side has to accept it."""
+    import math
+
+    cls = get_message("geometry_msgs/msg/Twist")
+    to_dict, from_dict = build_msg_to_dict(cls), build_dict_to_msg(cls)
+    original = cls()
+    original.linear.x = float("nan")
+    original.linear.y = float("inf")
+
+    rebuilt = from_dict(_json_round_trip(to_dict(original)))
+    assert math.isnan(rebuilt.linear.x)
+    # Documented lossy direction: an infinity comes back as NaN, not as an infinity.
+    assert math.isnan(rebuilt.linear.y)
+
+
+def test_null_is_still_rejected_for_a_field_that_is_not_a_number() -> None:
+    cls = get_message("std_msgs/msg/String")
+    with pytest.raises(ConversionError, match="expected a string"):
+        build_dict_to_msg(cls)({"data": None})
 
 
 # --------------------------------------------------------------------------------------
@@ -310,8 +357,9 @@ def test_unknown_field_on_an_empty_message_is_rejected() -> None:
         ("int32_value", 1.5, "expected an integer"),
         ("int32_value", True, "expected an integer"),
         ("int32_value", "abc", "expected an integer"),
+        ("int32_value", "12", "expected an integer"),
         ("float64_value", "abc", "expected a number"),
-        ("float64_value", None, "expected a number"),
+        ("float64_value", [1.0], "expected a number"),
         ("bool_value", 1, "expected a boolean"),
         ("bool_value", "maybe", "expected a boolean"),
     ],
@@ -517,6 +565,54 @@ def test_same_type_at_two_paths_gets_two_builders_with_distinct_labels() -> None
         with pytest.raises(ConversionError) as exc:
             from_dict({field: {"x": "nope"}})
         assert exc.value.field == f"{field}.x"
+
+
+def test_fixed_byte_array_is_writable_after_conversion() -> None:
+    """frombuffer over bytes is read-only, and in-place mutation would then fail obscurely."""
+    cls = get_message("test_msgs/msg/Arrays")
+    built = build_dict_to_msg(cls)({"uint8_values": base64.b64encode(b"\x01\x02\x03").decode()})
+    assert built.uint8_values.flags.writeable
+    built.uint8_values[0] = 9  # must not raise
+
+
+def test_byte_collection_element_errors_carry_the_bracket_suffix() -> None:
+    """Consistency with the labelling convention the module docstring sells."""
+    cls = get_message("sensor_msgs/msg/Image")
+    with pytest.raises(ConversionError) as exc:
+        build_dict_to_msg(cls)({"data": [1, 999]})
+    assert exc.value.field == "data[]"
+    assert str(exc.value).startswith("data[]: ")
+
+
+def test_raw_idl_wchar_is_refused_rather_than_guessed() -> None:
+    """No interface in the battery has one, so its representation is unverified."""
+    from rosidl_parser.definition import BasicType
+
+    from ros2_http_gateway import codegen
+
+    assert "wchar" not in codegen._NUMERIC
+    emitter = codegen._ToDictEmitter(int64_as_string=True)
+    with pytest.raises(codegen.UnsupportedFieldError, match="wchar"):
+        emitter.field(BasicType("wchar"), "_m.x")
+
+
+def test_msg_char_is_really_idl_uint8_on_this_distro() -> None:
+    """Pins the assumption that lets `char` share the uint8 path.
+
+    If a distro ever hands over BasicType("char") instead, this fails rather than the
+    converter quietly encoding something unverified.
+    """
+    from rosidl_parser.definition import BasicType
+
+    cls = get_message("test_msgs/msg/Arrays")
+    slots = dict(zip(cls.get_fields_and_field_types(), cls.SLOT_TYPES, strict=True))
+    element = slots["char_values"].value_type
+    assert isinstance(element, BasicType)
+    assert element.typename == "uint8"
+
+    basic = get_message("test_msgs/msg/BasicTypes")
+    scalars = dict(zip(basic.get_fields_and_field_types(), basic.SLOT_TYPES, strict=True))
+    assert scalars["char_value"].typename == "uint8"
 
 
 # --------------------------------------------------------------------------------------

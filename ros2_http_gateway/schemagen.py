@@ -10,8 +10,15 @@ Two directions, because they are genuinely different documents:
 * ``read`` describes a response body. Every field is present, ``int64`` is a string, and
   a ``double`` may be ``null`` because NaN and the infinities have no JSON spelling.
 * ``write`` describes a request body. Every field is optional (an omitted field keeps the
-  ROS default), 64-bit integers are accepted as either a number or a string, and byte
-  collections are accepted as base64 or as an array of integers.
+  ROS default), a ``double`` may be ``null`` (read back as NaN, which is what makes a
+  response body a legal request body), 64-bit integers are accepted as either a number or a
+  string because the read side emits a string, and byte collections are accepted as base64
+  or as an array of integers.
+
+Nothing else is widened. In particular a number is not accepted as a string: path
+parameters, which are always strings, are coerced against their target field before a
+converter sees them, so that this schema does not have to tell every client that any number
+anywhere may arrive as text.
 
 Repeated nested types are emitted once into ``$defs`` and referenced, so a type like
 ``test_msgs/MultiNested`` produces a readable document instead of a megabyte of nesting.
@@ -42,8 +49,9 @@ Direction = Literal["read", "write"]
 _INT_BOUNDS: Final[dict[str, tuple[int, int]]] = {
     "int8": (-(2**7), 2**7 - 1),
     "uint8": (0, 2**8 - 1),
+    # No wchar: see the note in codegen._NUMERIC. An unverified representation gets refused
+    # rather than described.
     "char": (0, 2**8 - 1),
-    "wchar": (0, 2**16 - 1),
     "int16": (-(2**15), 2**15 - 1),
     "uint16": (0, 2**16 - 1),
     "int32": (-(2**31), 2**31 - 1),
@@ -141,9 +149,12 @@ class _Builder:
         if typename == "octet":
             return {"type": "integer", "minimum": 0, "maximum": 255}
         if typename in ("float", "double"):
-            # NaN and the infinities are encoded as null, so a reader must expect it.
-            types = ["number", "null"] if self.direction == "read" else "number"
-            return {"type": types, "format": "float" if typename == "float" else "double"}
+            # Nullable in both directions: NaN and the infinities are written as null, and
+            # null is read back as NaN, so a response body round-trips as a request body.
+            return {
+                "type": ["number", "null"],
+                "format": "float" if typename == "float" else "double",
+            }
         bounds = _INT_BOUNDS.get(typename)
         if bounds is None:
             raise UnsupportedFieldError(f"no JSON schema for basic type {typename!r}")

@@ -480,7 +480,21 @@ def test_sse_path_colliding_with_an_endpoint_is_rejected(tmp_path: Path) -> None
     document = copy.deepcopy(MINIMAL)
     document["sse"] = {"include": ["/state"], "path": "/state"}
     (message,) = problems(tmp_path, document)
-    assert "also configured as an endpoint" in message
+    assert "sse.path" in message
+    assert "the event stream GET /state can match the same request as GET /state" in message
+
+
+def test_sse_path_shadowed_by_a_template_endpoint_is_rejected(tmp_path: Path) -> None:
+    """The old check was exact-string, so a template covering the stream path slipped past."""
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/{anything}"] = {
+        "topic": "/a",
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+    }
+    document["sse"] = {"include": ["/state"], "path": "/events"}
+    reported = problems(tmp_path, document)
+    assert any("event stream GET /events" in message for message in reported)
 
 
 def test_sse_without_include_is_rejected(tmp_path: Path) -> None:
@@ -494,34 +508,120 @@ def test_sse_without_include_is_rejected(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_action_route_shadowing_another_endpoint_is_rejected(tmp_path: Path) -> None:
-    document = copy.deepcopy(MINIMAL)
-    document["endpoints"]["/pick"] = {
+def _action_endpoint(**extra: Any) -> dict[str, Any]:
+    return {
         "action": "/pick_place",
         "type": "example_interfaces/action/Fibonacci",
         "roles": ["operator"],
+        **extra,
     }
+
+
+def test_action_route_shadowing_another_endpoint_is_rejected(tmp_path: Path) -> None:
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/pick"] = _action_endpoint()
     document["endpoints"]["/pick/history"] = {
         "topic": "/pick_history",
         "type": "example_interfaces/msg/String",
         "roles": ["viewer"],
     }
     (message,) = problems(tmp_path, document)
-    assert "/pick/{goal_id}" in message and "would shadow" in message
+    assert "generated action route GET /pick/{goal_id}" in message
+    assert "GET /pick/history" in message
+
+
+def test_two_templates_of_the_same_shape_and_method_are_rejected(tmp_path: Path) -> None:
+    """Which one answers would otherwise come down to route registration order."""
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/a/{x}"] = {
+        "service": "/one",
+        "type": "std_srvs/srv/Trigger",
+        "roles": ["operator"],
+    }
+    document["endpoints"]["/a/{y}"] = {
+        "service": "/two",
+        "type": "std_srvs/srv/Trigger",
+        "roles": ["operator"],
+    }
+    (message,) = problems(tmp_path, document)
+    assert "POST /a/{y} can match the same request as POST /a/{x}" in message
+
+
+def test_literal_shadowed_by_a_template_on_the_same_method_is_rejected(tmp_path: Path) -> None:
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/m/status"] = {
+        "topic": "/a",
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+    }
+    document["endpoints"]["/m/{command}"] = {
+        "topic": "/b",
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+    }
+    (message,) = problems(tmp_path, document)
+    assert "GET /m/{command} can match the same request as GET /m/status" in message
+
+
+def test_literal_and_template_on_different_methods_are_allowed(tmp_path: Path) -> None:
+    """The shape the brief's own example uses: a topic GET beside a service POST."""
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/m/status"] = {
+        "topic": "/a",
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+    }
+    document["endpoints"]["/m/{command}"] = {
+        "service": "/mission_control",
+        "type": "std_srvs/srv/Trigger",
+        "roles": ["operator"],
+    }
+    assert len(load(tmp_path, document).endpoints) == 3
+
+
+@pytest.mark.parametrize("reserved", ["/health", "/openapi.json", "/docs"])
+def test_endpoint_colliding_with_a_built_in_route_is_rejected(
+    tmp_path: Path, reserved: str
+) -> None:
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"][reserved] = {
+        "topic": "/a",
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+    }
+    (message,) = problems(tmp_path, document)
+    assert "the built-in" in message and reserved in message
+
+
+def test_a_catch_all_template_is_rejected_because_it_swallows_the_built_ins(
+    tmp_path: Path,
+) -> None:
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/{anything}"] = {
+        "topic": "/a",
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+    }
+    reported = problems(tmp_path, document)
+    assert any("/health" in message for message in reported)
+
+
+def test_action_derived_delete_does_not_collide_with_a_configured_post(tmp_path: Path) -> None:
+    """Same shape, different method, so both can be served unambiguously."""
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/pick"] = _action_endpoint()
+    document["endpoints"]["/pick/{item}"] = {
+        "service": "/pick_one",
+        "type": "std_srvs/srv/Trigger",
+        "roles": ["operator"],
+    }
+    assert len(load(tmp_path, document).endpoints) == 3
 
 
 def test_unrelated_paths_do_not_conflict(tmp_path: Path) -> None:
     document = copy.deepcopy(MINIMAL)
-    document["endpoints"]["/pick"] = {
-        "action": "/pick_place",
-        "type": "example_interfaces/action/Fibonacci",
-        "roles": ["operator"],
-    }
-    document["endpoints"]["/place"] = {
-        "action": "/place_only",
-        "type": "example_interfaces/action/Fibonacci",
-        "roles": ["operator"],
-    }
+    document["endpoints"]["/pick"] = _action_endpoint()
+    document["endpoints"]["/place"] = _action_endpoint(action="/place_only")
     assert len(load(tmp_path, document).endpoints) == 3
 
 
@@ -574,10 +674,20 @@ def test_duplicate_token_across_users_is_rejected(tmp_path: Path) -> None:
     assert "already assigned to 'one'" in message
 
 
-def test_token_without_a_secret_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "token",
+    [
+        {"user": "hmi", "roles": ["op"]},
+        {"token": "plaintext-value", "token_sha256": "a" * 64, "user": "hmi", "roles": ["op"]},
+    ],
+    ids=["neither", "both"],
+)
+def test_token_must_give_exactly_one_secret(tmp_path: Path, token: dict[str, Any]) -> None:
+    """Also pins the message: matched on document path, not a schema-path substring."""
     document = copy.deepcopy(MINIMAL)
-    document["auth"]["tokens"] = [{"user": "hmi", "roles": ["op"]}]
-    assert problems(tmp_path, document)
+    document["auth"]["tokens"] = [token]
+    (message,) = problems(tmp_path, document, mode=0o600)
+    assert message == "auth.tokens.0: must give exactly one of token or token_sha256"
 
 
 def test_empty_token_list_is_rejected(tmp_path: Path) -> None:

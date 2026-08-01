@@ -44,7 +44,6 @@ _COMPARABLE_BASICS: Final = frozenset(
         "int64",
         "uint64",
         "char",
-        "wchar",
     }
 )
 
@@ -199,11 +198,15 @@ def _poll_graph(
 ) -> dict[str, str]:
     from rclpy.action import get_action_names_and_types
 
-    lookups: dict[Kind, Callable[[], list[tuple[str, list[str]]]]] = {
+    # Only the kinds actually being looked up, so a config of topics does not poll the
+    # service and action graphs ten times a second for nothing.
+    all_lookups: dict[Kind, Callable[[], list[tuple[str, list[str]]]]] = {
         "topic": node.get_topic_names_and_types,
         "service": node.get_service_names_and_types,
         "action": lambda: get_action_names_and_types(node=node),
     }
+    pending_kinds = {endpoint.kind for endpoint in pending}
+    lookups = {kind: lookup for kind, lookup in all_lookups.items() if kind in pending_kinds}
     wanted = {endpoint.path: _absolute(endpoint.ros_name) for endpoint in pending}
     _LOG.info(
         "querying the ROS graph for %d name(s) (timeout %.1fs): %s",

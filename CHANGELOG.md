@@ -32,6 +32,25 @@ All notable changes to this project are documented here. Format follows
 
 ### Changed
 
+- **Breaking, pre-release:** the `gateway` console-script alias is gone. Wheel installs
+  generate console scripts from the same entry points, so it claimed `~/.local/bin/gateway`
+  on every `pip install`. Use `ros2 run ros2_http_gateway ros2-http-gateway`.
+- Request bodies are read strictly: a JSON number must be a number and a JSON boolean must
+  be a boolean. Previously every scalar also accepted a string, which the generated write
+  schemas did not admit, so an OpenAPI-validating client could be refused a request the
+  gateway would have taken, or vice versa. `int64`/`uint64` still accept a string, and float
+  fields now accept `null` as NaN, both so that a response body remains a legal request body.
+- Two routes that could match the same request are now a startup error, not just the
+  generated action subroutes: `/a/{x}` versus `/a/{y}`, a literal shadowed by a template on
+  the same method, `sse.path` overlapping any endpoint template, and the built-in
+  `/health`, `/openapi.json` and `/docs`.
+- Raw-IDL `wchar` is refused rather than guessed at; no interface in the test battery has
+  one, so its Python representation was never verified. `.msg` `char` is unaffected (it is
+  IDL `uint8`, now pinned by a test).
+- `package.xml` declares the interface packages the tests and examples actually need
+  (`test_msgs`, `example_interfaces`, `std_srvs`, `diagnostic_msgs`), so a rosdep-driven
+  build no longer depends on CI having apt-installed them by hand.
+
 - `numpy` is now a declared runtime dependency. It always was one in practice: `codegen.py`
   imports it and every generated message module does too, but a pip install into a plain
   virtualenv would not inherit the Debian `python3-numpy` that a ROS install relies on.
@@ -53,6 +72,17 @@ All notable changes to this project are documented here. Format follows
 - Conversion errors now name the field by the dotted path the client wrote
   (`header.stamp.sec`, `status[].values[].key`) rather than by the ROS type that declared
   it, and carry it separately as `ConversionError.field` for the `BAD_REQUEST` envelope.
+
+### Fixed
+
+- A fixed-size `uint8[N]` built from a request body was a read-only numpy view, so anything
+  mutating the message in place hit `assignment destination is read-only`.
+- Element errors inside a byte collection given as an array of integers reported the field
+  as `data` rather than `data[]`.
+- `_schema_message` matched the endpoint `oneOf` by substring-searching the schema path;
+  it now matches the document location, and covers `auth.tokens` too.
+- Type resolution polled all three graph APIs on every tick even when only topics were
+  pending.
 
 ### Notes
 

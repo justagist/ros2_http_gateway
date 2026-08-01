@@ -75,10 +75,13 @@ Repository = "https://github.com/justagist/ros2_http_gateway"
 Changelog = "https://github.com/justagist/ros2_http_gateway/blob/main/CHANGELOG.md"
 
 [project.scripts]
+# Exactly one name, and it is namespaced. A second `gateway` alias would make
+# `ros2 run ros2_http_gateway gateway` prettier, but console scripts are generated from
+# these entry points for wheel installs too, so every `pip install` would claim
+# ~/.local/bin/gateway. setup.cfg's install_scripts redirect only affects the
+# colcon/setup.py path, not wheels. Under colcon this script still lands in
+# lib/ros2_http_gateway/, so `ros2 run ros2_http_gateway ros2-http-gateway` works.
 ros2-http-gateway = "ros2_http_gateway.cli:main"
-# Second name so `ros2 run ros2_http_gateway gateway` resolves under an ament_python
-# install, where console scripts land in lib/ros2_http_gateway/.
-gateway = "ros2_http_gateway.cli:main"
 
 [tool.setuptools.dynamic]
 # Single source of truth for the version string. package.xml mirrors it and

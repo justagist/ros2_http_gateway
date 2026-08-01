@@ -117,11 +117,29 @@ def test_scalar_octet_is_a_byte_valued_integer() -> None:
     assert properties["byte_value"] == {"type": "integer", "minimum": 0, "maximum": 255}
 
 
-def test_doubles_are_nullable_on_read_only() -> None:
-    """Because NaN and the infinities are encoded as null."""
+def test_doubles_are_nullable_in_both_directions() -> None:
+    """NaN and the infinities are written as null, and null is read back as NaN.
+
+    Symmetric on purpose: a response body has to be a legal request body.
+    """
     cls = get_message("geometry_msgs/msg/Vector3")
-    assert json_schema_for(cls, direction="read")["properties"]["x"]["type"] == ["number", "null"]
-    assert json_schema_for(cls, direction="write")["properties"]["x"]["type"] == "number"
+    for direction in ("read", "write"):
+        schema = json_schema_for(cls, direction=direction)  # type: ignore[arg-type]
+        assert schema["properties"]["x"]["type"] == ["number", "null"]
+
+
+def test_no_scalar_is_widened_to_accept_a_string_except_wide_ints() -> None:
+    """The divergence this pins down: the schema must not promise string acceptance.
+
+    Every scalar type in the write schema has to be something the converter actually takes,
+    or an OpenAPI-validating client will send what the schema allows and get a 400.
+    """
+    schema = json_schema_for(get_message("test_msgs/msg/BasicTypes"), direction="write")
+    for name, field in schema["properties"].items():
+        types = field["type"]
+        types = types if isinstance(types, list) else [types]
+        if "string" in types:
+            assert name in ("int64_value", "uint64_value"), f"{name} must not accept a string"
 
 
 def test_byte_collections_are_base64_on_read_and_either_on_write() -> None:

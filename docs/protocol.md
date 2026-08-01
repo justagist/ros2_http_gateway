@@ -66,6 +66,12 @@ field, exactly as the client wrote it, and `field` carries it separately:
 
 Collection elements are marked with `[]`: `name[]`, `status[].values[].key`.
 
+Request bodies are read strictly: a JSON number must be a number, a JSON boolean must be a
+boolean, and a string is neither. Two exceptions exist so that a response body is always a
+legal request body: `int64`/`uint64` also accept a string, and float fields also accept
+`null`, which reads back as NaN. Path parameters are coerced against their target field
+before conversion, so the schemas never have to advertise string-for-number.
+
 ## Topics
 
 ### `GET <base>/<endpoint>`

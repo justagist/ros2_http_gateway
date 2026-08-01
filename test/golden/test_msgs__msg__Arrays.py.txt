@@ -46,10 +46,10 @@ def _build1(_d):
         _m.uint32_value = _to_int(_v, 0, 4294967295, 'basic_types_values[].uint32_value')
     _v = _d.get('int64_value', _MISS)
     if _v is not _MISS:
-        _m.int64_value = _to_int(_v, -9223372036854775808, 9223372036854775807, 'basic_types_values[].int64_value')
+        _m.int64_value = _to_wide_int(_v, -9223372036854775808, 9223372036854775807, 'basic_types_values[].int64_value')
     _v = _d.get('uint64_value', _MISS)
     if _v is not _MISS:
-        _m.uint64_value = _to_int(_v, 0, 18446744073709551615, 'basic_types_values[].uint64_value')
+        _m.uint64_value = _to_wide_int(_v, 0, 18446744073709551615, 'basic_types_values[].uint64_value')
     return _m
 
 def _build2(_d):
@@ -105,10 +105,10 @@ def _build3(_d):
         _m.uint32_value = _to_int(_v, 0, 4294967295, 'defaults_values[].uint32_value')
     _v = _d.get('int64_value', _MISS)
     if _v is not _MISS:
-        _m.int64_value = _to_int(_v, -9223372036854775808, 9223372036854775807, 'defaults_values[].int64_value')
+        _m.int64_value = _to_wide_int(_v, -9223372036854775808, 9223372036854775807, 'defaults_values[].int64_value')
     _v = _d.get('uint64_value', _MISS)
     if _v is not _MISS:
-        _m.uint64_value = _to_int(_v, 0, 18446744073709551615, 'defaults_values[].uint64_value')
+        _m.uint64_value = _to_wide_int(_v, 0, 18446744073709551615, 'defaults_values[].uint64_value')
     return _m
 
 def _build0(_d):
@@ -127,7 +127,7 @@ def _build0(_d):
         _m.byte_values = _octet_list(_v, 3, None, 'byte_values')
     _v = _d.get('char_values', _MISS)
     if _v is not _MISS:
-        _m.char_values = _np.frombuffer(_bytes_of(_v, 3, None, 'char_values'), dtype=_np.uint8)
+        _m.char_values = _np.frombuffer(_bytes_of(_v, 3, None, 'char_values'), dtype=_np.uint8).copy()
     _v = _d.get('float32_values', _MISS)
     if _v is not _MISS:
         _m.float32_values = _np.array([_to_float(_j1, 'float32_values[]') for _j1 in _check_len(_v, 3, 'float32_values')], dtype=_np.float32)
@@ -139,7 +139,7 @@ def _build0(_d):
         _m.int8_values = _np.array([_to_int(_j1, -128, 127, 'int8_values[]') for _j1 in _check_len(_v, 3, 'int8_values')], dtype=_np.int8)
     _v = _d.get('uint8_values', _MISS)
     if _v is not _MISS:
-        _m.uint8_values = _np.frombuffer(_bytes_of(_v, 3, None, 'uint8_values'), dtype=_np.uint8)
+        _m.uint8_values = _np.frombuffer(_bytes_of(_v, 3, None, 'uint8_values'), dtype=_np.uint8).copy()
     _v = _d.get('int16_values', _MISS)
     if _v is not _MISS:
         _m.int16_values = _np.array([_to_int(_j1, -32768, 32767, 'int16_values[]') for _j1 in _check_len(_v, 3, 'int16_values')], dtype=_np.int16)
@@ -154,10 +154,10 @@ def _build0(_d):
         _m.uint32_values = _np.array([_to_int(_j1, 0, 4294967295, 'uint32_values[]') for _j1 in _check_len(_v, 3, 'uint32_values')], dtype=_np.uint32)
     _v = _d.get('int64_values', _MISS)
     if _v is not _MISS:
-        _m.int64_values = _np.array([_to_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values[]') for _j1 in _check_len(_v, 3, 'int64_values')], dtype=_np.int64)
+        _m.int64_values = _np.array([_to_wide_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values[]') for _j1 in _check_len(_v, 3, 'int64_values')], dtype=_np.int64)
     _v = _d.get('uint64_values', _MISS)
     if _v is not _MISS:
-        _m.uint64_values = _np.array([_to_int(_j1, 0, 18446744073709551615, 'uint64_values[]') for _j1 in _check_len(_v, 3, 'uint64_values')], dtype=_np.uint64)
+        _m.uint64_values = _np.array([_to_wide_int(_j1, 0, 18446744073709551615, 'uint64_values[]') for _j1 in _check_len(_v, 3, 'uint64_values')], dtype=_np.uint64)
     _v = _d.get('string_values', _MISS)
     if _v is not _MISS:
         _m.string_values = [_to_str(_j1, 'string_values[]') for _j1 in _check_len(_v, 3, 'string_values')]
@@ -178,7 +178,7 @@ def _build0(_d):
         _m.byte_values_default = _octet_list(_v, 3, None, 'byte_values_default')
     _v = _d.get('char_values_default', _MISS)
     if _v is not _MISS:
-        _m.char_values_default = _np.frombuffer(_bytes_of(_v, 3, None, 'char_values_default'), dtype=_np.uint8)
+        _m.char_values_default = _np.frombuffer(_bytes_of(_v, 3, None, 'char_values_default'), dtype=_np.uint8).copy()
     _v = _d.get('float32_values_default', _MISS)
     if _v is not _MISS:
         _m.float32_values_default = _np.array([_to_float(_j1, 'float32_values_default[]') for _j1 in _check_len(_v, 3, 'float32_values_default')], dtype=_np.float32)
@@ -190,7 +190,7 @@ def _build0(_d):
         _m.int8_values_default = _np.array([_to_int(_j1, -128, 127, 'int8_values_default[]') for _j1 in _check_len(_v, 3, 'int8_values_default')], dtype=_np.int8)
     _v = _d.get('uint8_values_default', _MISS)
     if _v is not _MISS:
-        _m.uint8_values_default = _np.frombuffer(_bytes_of(_v, 3, None, 'uint8_values_default'), dtype=_np.uint8)
+        _m.uint8_values_default = _np.frombuffer(_bytes_of(_v, 3, None, 'uint8_values_default'), dtype=_np.uint8).copy()
     _v = _d.get('int16_values_default', _MISS)
     if _v is not _MISS:
         _m.int16_values_default = _np.array([_to_int(_j1, -32768, 32767, 'int16_values_default[]') for _j1 in _check_len(_v, 3, 'int16_values_default')], dtype=_np.int16)
@@ -205,10 +205,10 @@ def _build0(_d):
         _m.uint32_values_default = _np.array([_to_int(_j1, 0, 4294967295, 'uint32_values_default[]') for _j1 in _check_len(_v, 3, 'uint32_values_default')], dtype=_np.uint32)
     _v = _d.get('int64_values_default', _MISS)
     if _v is not _MISS:
-        _m.int64_values_default = _np.array([_to_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values_default[]') for _j1 in _check_len(_v, 3, 'int64_values_default')], dtype=_np.int64)
+        _m.int64_values_default = _np.array([_to_wide_int(_j1, -9223372036854775808, 9223372036854775807, 'int64_values_default[]') for _j1 in _check_len(_v, 3, 'int64_values_default')], dtype=_np.int64)
     _v = _d.get('uint64_values_default', _MISS)
     if _v is not _MISS:
-        _m.uint64_values_default = _np.array([_to_int(_j1, 0, 18446744073709551615, 'uint64_values_default[]') for _j1 in _check_len(_v, 3, 'uint64_values_default')], dtype=_np.uint64)
+        _m.uint64_values_default = _np.array([_to_wide_int(_j1, 0, 18446744073709551615, 'uint64_values_default[]') for _j1 in _check_len(_v, 3, 'uint64_values_default')], dtype=_np.uint64)
     _v = _d.get('string_values_default', _MISS)
     if _v is not _MISS:
         _m.string_values_default = [_to_str(_j1, 'string_values_default[]') for _j1 in _check_len(_v, 3, 'string_values_default')]

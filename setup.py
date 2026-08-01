@@ -43,8 +43,6 @@ setup(
     entry_points={
         "console_scripts": [
             f"ros2-http-gateway = {PACKAGE_NAME}.cli:main",
-            f"gateway = {PACKAGE_NAME}.cli:main",
         ],
     },
-    zip_safe=True,
 )
