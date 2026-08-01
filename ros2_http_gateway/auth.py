@@ -1,13 +1,10 @@
 """Authentication and role checks.
 
-v1 ships static bearer tokens and nothing else. :class:`Authenticator` is a protocol rather
-than a concrete base class so that a JWT or OIDC implementation can be dropped in later
-without touching the request path: it only has to turn a presented credential into an
-:class:`Identity`, or None.
+v1 ships static bearer tokens. :class:`Authenticator` is a protocol so JWT or OIDC can be added
+later without touching the request path.
 
-Comparison is against the SHA-256 digest with :func:`hmac.compare_digest`, never ``==``. A
-plain string compare short-circuits at the first differing byte, which leaks the stored
-digest one byte at a time to anyone who can measure response latency.
+Comparison uses :func:`hmac.compare_digest`, never ``==``: a plain compare short-circuits at the
+first differing byte and leaks the stored digest to anyone timing responses.
 """
 
 from __future__ import annotations
@@ -52,9 +49,8 @@ MISSING_ROLE: Final = Denial("token lacks a required role")
 class Authenticator(Protocol):
     """Turns a presented credential into an identity.
 
-    The seam a future JWT or OIDC authenticator plugs into. Implementations must not raise
-    for a bad credential; returning None is how failure is reported, so that the request
-    path has exactly one shape.
+    Implementations must not raise for a bad credential; returning None is how failure is
+    reported, so the request path has one shape.
     """
 
     def authenticate(self, presented: str | None) -> Identity | None:
@@ -65,8 +61,7 @@ class Authenticator(Protocol):
 class StaticTokenAuthenticator:
     """Checks a bearer token against the digests in the config file.
 
-    Args:
-        tokens: The configured token identities. Only their digests are retained.
+    Only the digests are retained; the plaintext is never stored.
     """
 
     __slots__ = ("_identities",)
@@ -79,14 +74,8 @@ class StaticTokenAuthenticator:
     def authenticate(self, presented: str | None) -> Identity | None:
         """Return the identity holding ``presented``, or None.
 
-        Every configured digest is compared even after a match, so the time taken does not
-        depend on which token was presented or where it sits in the file.
-
-        Args:
-            presented: The raw bearer token from the request, or None if absent.
-
-        Returns:
-            The matching identity, or None.
+        Every digest is compared even after a match, so timing does not reveal which token was
+        presented or where it sits in the file.
         """
         if not presented:
             return None
@@ -100,14 +89,7 @@ class StaticTokenAuthenticator:
 
 
 def bearer_token(header: str | None) -> str | None:
-    """Extract the credential from an ``Authorization`` header value.
-
-    Args:
-        header: The raw header value, or None if the header is absent.
-
-    Returns:
-        The token, or None if the header is missing or not a Bearer credential.
-    """
+    """Extract the credential from an ``Authorization`` header, or None if it is not Bearer."""
     if not header or not header.lower().startswith(_BEARER_PREFIX):
         return None
     token = header[len(_BEARER_PREFIX) :].strip()

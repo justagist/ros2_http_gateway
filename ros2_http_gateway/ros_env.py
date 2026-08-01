@@ -1,8 +1,7 @@
 """Guarded access to the ROS 2 Python runtime.
 
-Everything that needs ``rclpy`` goes through here so that a missing ROS environment
-produces one actionable message instead of a bare ``ModuleNotFoundError`` from deep
-inside an import chain.
+Everything needing ``rclpy`` goes through here, so a missing ROS environment gives one
+actionable message rather than a bare ``ModuleNotFoundError`` from deep in an import chain.
 """
 
 from __future__ import annotations
@@ -21,11 +20,7 @@ class RosEnvironmentError(RuntimeError):
 
 
 def rclpy_available() -> bool:
-    """Return whether ``rclpy`` can be imported without importing it.
-
-    Returns:
-        True when an importable ``rclpy`` is on the module search path.
-    """
+    """Return whether ``rclpy`` can be imported, without importing it."""
     try:
         return importlib.util.find_spec("rclpy") is not None
     except (ImportError, ValueError):
@@ -33,10 +28,6 @@ def rclpy_available() -> bool:
 
 
 def require_rclpy() -> None:
-    """Fail fast with an actionable message when ``rclpy`` is unavailable.
-
-    Raises:
-        RosEnvironmentError: If ``rclpy`` cannot be imported.
-    """
+    """Raise :class:`RosEnvironmentError` with an actionable message if ``rclpy`` is absent."""
     if not rclpy_available():
         raise RosEnvironmentError(_HINT)

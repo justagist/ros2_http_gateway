@@ -1,15 +1,13 @@
 """Turn a validated config into resolved interface types and compiled converters.
 
-This is the second half of the fail-fast doctrine: by the time :func:`resolve` returns,
-every interface type is loaded, every converter is compiled, and every dotted precondition
-field has been checked against a real message definition. Nothing about the shape of the
-data is discovered after the port opens.
+By the time :func:`resolve` returns, every interface type is loaded, every converter is
+compiled, and every dotted precondition field has been checked against a real message
+definition. Nothing about the shape of the data is discovered after the port opens.
 
-Needs a sourced ROS 2 environment. By default the ROS graph is only queried for endpoints
-that omit ``type:``, which is what lets ``--check`` run hermetically in CI against a config
-that pins its types. Pass ``verify_online=True`` (``--check --online``) to also check the
-pinned ones against the live graph: a type string can be syntactically valid, importable
-and still not be what the robot is actually publishing.
+Needs a sourced ROS 2 environment. Only endpoints that omit ``type:`` are looked up on the
+graph, which is what lets ``--check`` run hermetically in CI. ``verify_online=True``
+(``--check --online``) also checks the pinned ones against the live graph, since a type string
+can be valid, importable and still not what the robot publishes.
 """
 
 from __future__ import annotations
@@ -31,8 +29,8 @@ _LOG = logging.getLogger(__name__)
 _KIND_TO_NAMESPACE: Final[dict[Kind, str]] = {"topic": "msg", "service": "srv", "action": "action"}
 _GRAPH_POLL_S: Final = 0.1
 
-# Precondition states come from a config file, so they are strings. A field that cannot be
-# compared with one as text is a config mistake worth catching at startup.
+# Precondition states come from a config file, so comparison is textual; a field that cannot
+# be compared as text is a config mistake worth catching at startup.
 _COMPARABLE_BASICS: Final = frozenset(
     {
         "boolean",
@@ -97,22 +95,14 @@ def resolve(
 
     Args:
         config: A validated configuration.
-        discovery_timeout: Seconds to wait for the ROS graph while resolving omitted
-            types. Ignored when every endpoint pins its ``type:`` and ``verify_online`` is
-            not set.
-        node: An existing rclpy node to query the graph with. When None and graph access
-            is needed, a short-lived context and node are created and torn down.
-        verify_online: Also check pinned ``type:`` values against the live graph, and
-            report an endpoint whose ROS name is absent from it. Turns a hermetic check
-            into a deploy-time smoke test on the real robot.
-
-    Returns:
-        The resolved configuration.
+        discovery_timeout: Seconds to wait for the ROS graph. Unused when every endpoint pins
+            its ``type:`` and ``verify_online`` is not set.
+        node: Node to query the graph with. When None, a short-lived one is created.
+        verify_online: Also check pinned types against the live graph, turning a hermetic
+            check into a deploy-time smoke test on the real robot.
 
     Raises:
-        ConfigError: If any type is unresolvable, ambiguous, mismatched with its endpoint
-            kind, contradicts the live graph under ``verify_online``, or if a precondition
-            names a field that does not exist. Every problem is reported at once.
+        ConfigError: Listing every problem found, not just the first.
     """
     problems: list[str] = []
     discovered = _discover_types(config, discovery_timeout, node, problems, verify_online)
@@ -200,8 +190,8 @@ def _poll_graph(
 ) -> dict[str, str]:
     from rclpy.action import get_action_names_and_types
 
-    # Only the kinds actually being looked up, so a config of topics does not poll the
-    # service and action graphs ten times a second for nothing.
+    # Only the kinds being looked up, so a config of topics does not poll the service and
+    # action graphs ten times a second for nothing.
     all_lookups: dict[Kind, Callable[[], list[tuple[str, list[str]]]]] = {
         "topic": node.get_topic_names_and_types,
         "service": node.get_service_names_and_types,
@@ -329,11 +319,7 @@ def _bindings(
     where: str,
     problems: list[str],
 ) -> tuple[ParamBinding, ...]:
-    """Resolve each request_map entry to the field it fills and how to fill it.
-
-    Every failure here is a config mistake worth catching before the port opens: a target
-    field that does not exist, or one that text cannot sensibly fill.
-    """
+    """Resolve each request_map entry to the field it fills and how to fill it."""
     built: list[ParamBinding] = []
     for target, template in endpoint.request_map.items():
         parts = tuple(target.split("."))

@@ -1,28 +1,12 @@
 """Latest-sample caches for topic read endpoints.
 
-Subscriptions are created with ``raw=True``, so a message arriving costs one tuple
-allocation and one attribute assignment: no deserialisation, no JSON, no lock. CPython
-makes the assignment atomic, and the reader only ever sees a fully built sample or the
-previous one, never a half-written mixture.
+Subscriptions use ``raw=True``: arrival costs one tuple and one attribute store, atomic under
+CPython, so a reader never sees a torn sample. Decoding and encoding are deferred to the read
+side and memoised by sequence number.
 
-Deserialising and encoding happen on the asyncio side, when a request or a stream tick
-actually needs the value, and the encoded bytes are memoised by sequence number. A topic
-published at 1 kHz and read once a second is therefore deserialised once a second.
-
-The response envelope is assembled by concatenating bytes around the memoised payload
-rather than by re-encoding a dict, because ``stale`` depends on when the request arrived
-while the payload does not.
-
-**Deserialising and encoding run on the event loop, by design.** Control-plane payloads are
-small enough that dispatching them to a thread pool would cost more than the encode, and the
-memoisation is free of races *because* it is loop-confined: the check and the store in
-:meth:`TopicCache.encoded_data` have no await between them, so no second reader can
-interleave. That invariant is load-bearing. Nothing off the loop may call
-:meth:`encoded_data` or :meth:`response_body`; the ROS side calls :meth:`offer` and nothing
-else.
-
-Staleness is measured on the monotonic clock, not the wall clock the envelope reports. An
-NTP step would otherwise make fresh data look stale, or worse, stale data look fresh.
+Decode and encode run on the event loop. That is what makes the memoisation race-free -- check
+and store have no await between them -- so nothing off the loop may call :meth:`encoded_data`,
+:meth:`decoded` or :meth:`response_body`. The ROS side calls :meth:`offer` and nothing else.
 """
 
 from __future__ import annotations
@@ -47,9 +31,8 @@ EMPTY_BODY: Final = b'{"data":null,"stamp":null,"seq":0,"stale":true}'
 class Sample(NamedTuple):
     """One received message, still in its wire form.
 
-    Two clocks on purpose: ``stamp`` is what the response reports, and ``monotonic`` is what
-    staleness is judged against, so that resetting the system clock cannot make a fresh
-    sample look stale or a stale one fresh.
+    Two clocks: ``stamp`` is reported to clients, ``monotonic`` judges staleness, so a clock
+    step cannot make fresh data look stale or stale data fresh.
     """
 
     raw: bytes
@@ -61,10 +44,7 @@ class Sample(NamedTuple):
 class TopicCache:
     """Holds the newest sample of one topic and its memoised JSON encoding.
 
-    Args:
-        message_type: The generated message class carried on the topic.
-        to_dict: Compiled converter for that type.
-        stale_after_ms: Age past which a read reports ``"stale": true``; None never stales.
+    ``stale_after_ms`` of None never stales.
     """
 
     __slots__ = (
@@ -98,15 +78,10 @@ class TopicCache:
     # ---------------------------------------------------------------- ROS thread side
 
     def offer(self, raw: bytes) -> None:
-        """Store a newly received raw message. Called from a ROS callback thread.
+        """Store a newly received raw CDR message. Called from a ROS callback thread.
 
-        The increment is safe without a lock because every subscription gets its own
-        mutually exclusive callback group, so two callbacks for the same topic never
-        overlap. The publish of the new tuple is a single attribute store, which is what
-        makes a reader unable to observe a torn sample.
-
-        Args:
-            raw: The serialised CDR message as handed over by ``raw=True``.
+        Lock-free: each subscription has its own mutually exclusive callback group, so
+        callbacks for one topic never overlap.
         """
         self._seq += 1
         self._sample = Sample(raw, self._seq, time.time(), time.monotonic())
@@ -120,13 +95,10 @@ class TopicCache:
 
     @property
     def seq(self) -> int:
-        """The sequence number of the newest sample, or 0 before the first one.
+        """Sequence number of the newest sample, or 0 before the first.
 
-        Read from the sample rather than from the counter so that it can never run ahead of
-        :attr:`latest`. :meth:`offer` increments the counter and then stores the sample, and a
-        reader landing between the two would otherwise see a sequence number belonging to a
-        message it cannot yet get at -- exactly the kind of thing a stream broadcaster would
-        key off and then skip.
+        Read from the sample, not the counter, so it can never run ahead of :attr:`latest` --
+        a reader landing mid-:meth:`offer` would otherwise see a seq whose sample is not there.
         """
         sample = self._sample
         return sample.seq if sample is not None else 0
@@ -134,17 +106,9 @@ class TopicCache:
     def decoded(self, sample: Sample) -> dict[str, Any]:
         """Return ``sample`` as a converted dict, deserialising at most once per sample.
 
-        Memoised separately from the encoded bytes so that a policy check reading one field
-        and a GET returning the whole message share the single deserialisation, in either
-        order.
-
-        Must be called from the event loop thread; see the module docstring.
-
-        Args:
-            sample: The sample to decode, as returned by :attr:`latest`.
-
-        Returns:
-            The converted message. Not plain JSON: numeric arrays are still numpy.
+        Memoised separately from the encoded bytes so a policy check reading one field and a GET
+        returning the whole message share one deserialisation, in either order. Numeric arrays
+        are still numpy, so this is not plain JSON.
         """
         if self._decoded_seq == sample.seq:
             return self._decoded
@@ -157,16 +121,7 @@ class TopicCache:
         return value
 
     def encoded_data(self, sample: Sample) -> bytes:
-        """Return the JSON encoding of ``sample``, deserialising at most once per sample.
-
-        Must be called from the event loop thread; see the module docstring.
-
-        Args:
-            sample: The sample to encode, as returned by :attr:`latest`.
-
-        Returns:
-            The encoded message, without the surrounding response envelope.
-        """
+        """Return the JSON encoding of ``sample``, without the response envelope."""
         if self._encoded_seq == sample.seq:
             return self._encoded
 
@@ -176,27 +131,17 @@ class TopicCache:
         return encoded
 
     def is_stale(self, sample: Sample, now_monotonic: float) -> bool:
-        """Whether ``sample`` is older than the configured staleness threshold.
-
-        Args:
-            sample: The sample to judge.
-            now_monotonic: A :func:`time.monotonic` reading, not a wall-clock one.
-        """
+        """Whether ``sample`` is older than the threshold. ``now_monotonic`` is not wall clock."""
         return (
             self._stale_after_s is not None
             and (now_monotonic - sample.monotonic) > self._stale_after_s
         )
 
     def response_body(self, now_monotonic: float | None = None) -> bytes:
-        """Build the full JSON body for a read of this endpoint.
+        """Build the JSON body for a read, concatenated around the memoised payload.
 
-        Must be called from the event loop thread; see the module docstring.
-
-        Args:
-            now_monotonic: Monotonic time to judge staleness against. Defaults to now.
-
-        Returns:
-            The encoded response body.
+        Not re-encoded as a dict because ``stale`` depends on request time while the payload
+        does not.
         """
         sample = self._sample
         if sample is None:

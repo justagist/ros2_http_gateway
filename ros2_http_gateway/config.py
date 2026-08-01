@@ -5,11 +5,8 @@ config engine is unit-testable on a plain Python installation. Validation that n
 interface definitions (type resolution, dotted precondition fields) lives in
 :mod:`ros2_http_gateway.resolve`.
 
-Two habits are deliberate:
-
-* Every problem in a file is reported, not just the first. Fixing a deployment config one
-  error per run is miserable, and this is the tool a CI job runs.
-* Every message names the exact config location and, where there is one, the fix.
+Every problem in a file is reported rather than just the first, and every message names the
+config location and, where there is one, the fix. This is the tool a CI job runs.
 """
 
 from __future__ import annotations
@@ -43,8 +40,7 @@ _PARAM_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _WILDCARD: Final = "*"
 
 # Served unconditionally under http.base_path, so an endpoint cannot be configured at one.
-# Listed here rather than discovered later so a collision fails at startup, not at the
-# first request.
+# Listed here so a collision fails at startup rather than at the first request.
 _BUILT_IN_ROUTES: Final = (
     ("GET", "/health", "health"),
     ("GET", "/openapi.json", "OpenAPI document"),
@@ -92,15 +88,9 @@ class Precondition:
     allow: Mapping[str, frozenset[str]]
 
     def permitted_states(self, param_value: str | None) -> frozenset[str] | None:
-        """Return the states allowed for ``param_value``, or None if it is not allowed.
+        """Return the states allowed for ``param_value``, or None if it is not listed.
 
-        Args:
-            param_value: Value of the keying path parameter, or None when the endpoint has
-                no path parameters.
-
-        Returns:
-            The permitted state set, which may be ``{"*"}`` meaning any state, or None when
-            the parameter value is not listed at all.
+        The set may be ``{"*"}``, meaning any state.
         """
         if param_value is not None:
             exact = self.allow.get(param_value)
@@ -210,11 +200,7 @@ class GatewayConfig:
 
 
 def load_schema() -> dict[str, Any]:
-    """Return the bundled config JSON Schema.
-
-    Returns:
-        The parsed schema document.
-    """
+    """Return the bundled config JSON Schema."""
     with SCHEMA_PATH.open("rb") as handle:
         schema: dict[str, Any] = json.load(handle)
     return schema
@@ -223,15 +209,7 @@ def load_schema() -> dict[str, Any]:
 def load_config(path: str | Path) -> GatewayConfig:
     """Load, validate and default a config file.
 
-    Args:
-        path: Path to the YAML config file.
-
-    Returns:
-        The frozen configuration model.
-
-    Raises:
-        ConfigError: If the file is unreadable, malformed, violates the schema, or is
-            internally inconsistent. Every problem found is reported at once.
+    Raises :class:`ConfigError` listing every problem found, not just the first.
     """
     source = Path(path)
     document = _read_yaml(source)
@@ -277,10 +255,8 @@ def _pointer(parts: Iterable[Any]) -> str:
 def _schema_message(error: jsonschema.ValidationError) -> str:
     """Turn a schema error into something a config author can act on.
 
-    The oneOf cases are matched on the document location of the failure rather than by
-    looking for a substring in the schema path, so that reshuffling the schema internals
-    cannot silently turn a helpful message back into "is not valid under any of the given
-    schemas".
+    oneOf cases match on the document location, not on a substring of the schema path, so
+    reshuffling the schema cannot silently restore "is not valid under any of the given schemas".
     """
     path = list(error.absolute_path)
     if error.validator == "oneOf":
@@ -520,11 +496,9 @@ class _Builder:
     ) -> None:
         """A state endpoint a gate depends on must have an age limit.
 
-        The policy engine refuses a call when the state sample is stale, but only an endpoint
-        with ``stale_after_ms`` can ever *be* stale. Without one, killing the state publisher
-        leaves the gate authorising against the last sample it ever saw, indefinitely -- which
-        is the exact failure a precondition exists to prevent. An error rather than a warning,
-        because a line in a log is not a safety control.
+        Only an endpoint with ``stale_after_ms`` can ever *be* stale. Without one, killing the
+        state publisher leaves the gate authorising against the last sample it ever saw,
+        indefinitely. An error rather than a warning: a log line is not a safety control.
         """
         target = endpoints.get(key)
         if target is None or not target.is_topic_read:
@@ -554,11 +528,9 @@ class _Builder:
     def route_conflicts(self, endpoints: Mapping[str, EndpointConfig]) -> None:
         """Reject any two routes that could match the same request.
 
-        Not just the generated action subroutes: ``/a/{x}`` and ``/a/{y}`` on the same
-        method are indistinguishable, and so are a literal and a template that covers it
-        (``/mission/status`` versus ``/mission/{command}``). Left undetected, which of them
-        answers a request would come down to route registration order, which is exactly the
-        class of surprise this config engine exists to remove.
+        Not just generated action subroutes: ``/a/{x}`` and ``/a/{y}`` on one method are
+        indistinguishable, as are a literal and a template covering it. Undetected, which one
+        answers comes down to registration order.
         """
         routes = list(_all_routes(endpoints, self.document.get("sse")))
         for index, earlier in enumerate(routes):
@@ -683,8 +655,7 @@ def _all_routes(
 ) -> Iterator[_Route]:
     """Yield every route the gateway serves, configured, generated or built in.
 
-    Built-in routes come first so that a configured endpoint colliding with one is the side
-    that gets blamed.
+    Built-ins come first so a configured endpoint colliding with one is the side blamed.
     """
     for method, template, name in _BUILT_IN_ROUTES:
         yield _Route(method, template, "endpoints", f"the built-in {name} route {template}")
@@ -694,8 +665,8 @@ def _all_routes(
         yield _Route(endpoint.method, path, where, f"{endpoint.method} {path}")
         if endpoint.kind != "action":
             continue
-        # Derived by the action protocol rather than written by the config author, which is
-        # exactly why a collision with one needs pointing out.
+        # Derived by the action protocol, not written by the author, which is why a collision
+        # with one needs pointing out.
         for method, template in (
             ("GET", f"{path}/{{goal_id}}"),
             ("DELETE", f"{path}/{{goal_id}}"),

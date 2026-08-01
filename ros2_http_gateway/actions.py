@@ -1,16 +1,13 @@
 """Goal registry for action endpoints.
 
-An action is the one thing here that outlives its request, so it needs somewhere to live. A
-submitted goal gets a record; later requests find it by id, and it is evicted once it has been
-terminal for ``actions.result_ttl_s``.
+An action outlives its request, so a submitted goal gets a record; later requests find it by id,
+and it is evicted once terminal for ``actions.result_ttl_s``.
 
-Everything in this module is confined to the event loop. Feedback and results arrive on ROS
-threads and are handed over with ``loop.call_soon_threadsafe``, so the registry itself needs no
-locks -- the same arrangement the topic caches use in the other direction.
+Loop-confined: feedback and results arrive on ROS threads and are handed over with
+``loop.call_soon_threadsafe``, so the registry needs no locks.
 
-Eviction is lazy rather than timed: a sweep runs whenever a goal is created, which is the only
-way the registry grows, and a lookup drops an expired record before answering. So no background
-task, and an idle gateway does no work at all.
+Eviction is lazy -- a sweep on creation, the only way the registry grows, plus a drop on lookup
+-- so there is no timer and an idle gateway does nothing.
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -36,8 +33,7 @@ __all__ = [
     "terminal_frame",
 ]
 
-# action_msgs/msg/GoalStatus, mapped onto the names the protocol uses. Read once here rather
-# than imported at module scope so that this file stays importable without ROS.
+# action_msgs/msg/GoalStatus, transcribed rather than imported so this file needs no ROS.
 _STATUS_NAMES: Final[dict[int, str]] = {
     0: "unknown",
     1: "accepted",
@@ -50,8 +46,7 @@ _STATUS_NAMES: Final[dict[int, str]] = {
 
 TERMINAL: Final = frozenset({"succeeded", "canceled", "aborted"})
 
-# Per-goal stream backlog. A client that cannot keep up loses the oldest feedback rather than
-# stalling the goal; order is preserved, gaps are visible in the sequence the server sends.
+# Per-goal stream backlog: a slow client loses its oldest feedback rather than stalling the goal.
 _STREAM_BACKLOG: Final = 64
 
 _NULL: Final = b"null"
@@ -98,22 +93,12 @@ class GoalRecord:
         return self.status in TERMINAL
 
     def current_status(self) -> str:
-        """The status to report: live from the goal handle while the goal is still running.
+        """Live status from the goal handle while running, recorded status once finished.
 
-        The action client already tracks status through its own status subscription, so
-        ``executing`` need not be inferred -- reading it beats leaving a running goal reported
-        as ``accepted`` until it finishes, which the protocol does not promise.
-
-        The handle is only consulted for the non-terminal progression. It reaches a terminal
-        code before the result task has collected the outcome, so trusting it there would answer
-        ``succeeded`` with ``"result": null`` for a moment -- and a terminal status has to mean
-        the result is there. Terminal therefore comes from the record alone, which is set at the
-        same instant as the result.
-
-        Two further cases keep the recorded value. Once terminal it is authoritative. And while
-        a cancellation is in flight, ``canceling`` is what this gateway has already told the
-        client, so reverting to ``executing`` because the server has not acted yet would
-        contradict its own answer.
+        The handle supplies only the non-terminal progression. It goes terminal before the result
+        task has collected the outcome, and a terminal status must imply the result is present,
+        so terminal comes from the record -- which is set together with the result. ``canceling``
+        is likewise kept, since it is what this gateway already told the client.
         """
         if self.is_terminal or self.status == "canceling" or self.handle is None:
             return self.status
@@ -140,10 +125,7 @@ class GoalRecord:
 class GoalRegistry:
     """Tracks live and recently finished goals.
 
-    Args:
-        ttl_s: How long a terminal goal stays queryable.
-        clock: Monotonic time source. Injectable so that eviction can be tested without
-            sleeping through a five-minute TTL.
+    ``clock`` is injectable so eviction can be tested without sleeping through the TTL.
     """
 
     __slots__ = ("_clock", "_records", "_ttl_s")
@@ -156,15 +138,8 @@ class GoalRegistry:
     def __len__(self) -> int:
         return len(self._records)
 
-    def __iter__(self) -> Iterator[GoalRecord]:
-        return iter(list(self._records.values()))
-
     def create(self, endpoint: str) -> GoalRecord:
-        """Register a new goal and return its record.
-
-        Sweeps first: creation is the only way the registry grows, so this is where the
-        expired records can be reclaimed without a timer.
-        """
+        """Register a new goal, sweeping expired ones first."""
         self.sweep()
         record = GoalRecord(goal_id=uuid.uuid4().hex, endpoint=endpoint)
         self._records[record.goal_id] = record
@@ -173,8 +148,7 @@ class GoalRegistry:
     def get(self, endpoint: str, goal_id: str) -> GoalRecord | None:
         """Find a goal belonging to an endpoint, or None if unknown or expired.
 
-        The endpoint is part of the lookup so that a goal id from one action cannot be read
-        through another's routes.
+        Keyed by endpoint too, so an id issued by one cannot be read through another's routes.
         """
         record = self._records.get(goal_id)
         if record is None or record.endpoint != endpoint:
@@ -204,8 +178,7 @@ class GoalRegistry:
     def on_feedback(self, record: GoalRecord, encoded: bytes) -> None:
         """Record feedback and fan the framed bytes out to every stream.
 
-        Encoded once by the caller and shared by reference, so N listeners cost N queue
-        appends rather than N conversions.
+        Encoded once by the caller and shared by reference: N listeners cost N queue appends.
         """
         if record.is_terminal:
             # call_soon_threadsafe ordering allows a callback scheduled from the ROS thread to
@@ -277,16 +250,7 @@ def _offer(queue: asyncio.Queue[bytes | None], item: bytes | None) -> None:
 def encode_feedback(converter: Callable[[Any], dict[str, Any]], message: Any) -> bytes:
     """Encode an action feedback message.
 
-    The callback receives the generated ``*_FeedbackMessage`` wrapper, which carries the goal
-    id alongside the feedback itself, so the converter has to be applied to ``.feedback`` and
-    not to the message. Measured, not assumed: the callback hands over
-    ``Fibonacci_FeedbackMessage``, never ``Fibonacci.Feedback``.
-
-    Args:
-        converter: The compiled converter for the action's Feedback type.
-        message: The wrapper as handed to the feedback callback.
-
-    Returns:
-        The encoded feedback payload.
+    The callback receives the generated ``*_FeedbackMessage`` wrapper, not the Feedback type, so
+    the converter applies to ``.feedback``.
     """
     return orjson.dumps(converter(message.feedback), option=orjson.OPT_SERIALIZE_NUMPY)

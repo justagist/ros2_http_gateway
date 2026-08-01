@@ -1,27 +1,21 @@
 """JSON Schema generation for ROS interface types.
 
-The schemas describe exactly what the generated converters in
-:mod:`ros2_http_gateway.codegen` produce and accept, which is what makes the OpenAPI
-document assembled in phase 6 trustworthy rather than decorative. If the two ever
-disagree, the converters are right and this module is wrong.
+These describe exactly what the converters in :mod:`ros2_http_gateway.codegen` produce and
+accept. If the two disagree, the converters are right and this module is wrong.
 
-Two directions, because they are genuinely different documents:
+Read and write are genuinely different documents:
 
-* ``read`` describes a response body. Every field is present, ``int64`` is a string, and
-  a ``double`` may be ``null`` because NaN and the infinities have no JSON spelling.
-* ``write`` describes a request body. Every field is optional (an omitted field keeps the
-  ROS default), a ``double`` may be ``null`` (read back as NaN, which is what makes a
-  response body a legal request body), 64-bit integers are accepted as either a number or a
-  string because the read side emits a string, and byte collections are accepted as base64
-  or as an array of integers.
+* ``read`` describes a response body: every field present, ``int64`` a string, ``double``
+  nullable because NaN and the infinities have no JSON spelling.
+* ``write`` describes a request body: every field optional (an omission keeps the ROS
+  default), ``double`` nullable (read back as NaN, which is what makes a response body a
+  legal request body), 64-bit integers accepted as number or string, byte collections
+  accepted as base64 or an array of integers.
 
-Nothing else is widened. In particular a number is not accepted as a string: path
-parameters, which are always strings, are coerced against their target field before a
-converter sees them, so that this schema does not have to tell every client that any number
-anywhere may arrive as text.
+Nothing else is widened -- notably a number is not accepted as a string, because path
+parameters are coerced against their target field before a converter sees them.
 
-Repeated nested types are emitted once into ``$defs`` and referenced, so a type like
-``test_msgs/MultiNested`` produces a readable document instead of a megabyte of nesting.
+Repeated nested types are interned into ``$defs``.
 """
 
 from __future__ import annotations
@@ -49,8 +43,7 @@ Direction = Literal["read", "write"]
 _INT_BOUNDS: Final[dict[str, tuple[int, int]]] = {
     "int8": (-(2**7), 2**7 - 1),
     "uint8": (0, 2**8 - 1),
-    # No wchar: see the note in codegen._NUMERIC. An unverified representation gets refused
-    # rather than described.
+    # No wchar: see codegen._NUMERIC.
     "char": (0, 2**8 - 1),
     "int16": (-(2**15), 2**15 - 1),
     "uint16": (0, 2**16 - 1),
@@ -65,14 +58,7 @@ _DIGITS_PATTERN: Final = r"^-?[0-9]+$"
 
 
 def schema_ref_name(msg_type: MessageClass) -> str:
-    """Return the ``$defs`` key used for a message type.
-
-    Args:
-        msg_type: A generated ROS message class.
-
-    Returns:
-        The type name with slashes replaced, e.g. ``geometry_msgs.msg.Twist``.
-    """
+    """Return the ``$defs`` key for a message type, e.g. ``geometry_msgs.msg.Twist``."""
     return type_name_of(msg_type).replace("/", ".")
 
 
@@ -81,16 +67,8 @@ def json_schema_for(
 ) -> dict[str, Any]:
     """Generate a self-contained JSON Schema for a message type.
 
-    Args:
-        msg_type: A generated ROS message class.
-        direction: ``read`` for a response body, ``write`` for a request body.
-        int64_as_string: Must match the converter setting for the same type.
-
-    Returns:
-        A JSON Schema document. Nested types appear under ``$defs``.
-
-    Raises:
-        UnsupportedFieldError: If the type contains a field kind with no JSON encoding.
+    ``int64_as_string`` must match the converter setting for the same type. Nested types appear
+    under ``$defs``.
     """
     builder = _Builder(direction=direction, int64_as_string=int64_as_string)
     root = builder.struct(msg_type)
@@ -118,7 +96,7 @@ class _Builder:
             "additionalProperties": False,
         }
         if properties and self.direction == "read":
-            # A response always carries every field, which lets a client skip presence checks.
+            # A response always carries every field, so a client can skip presence checks.
             schema["required"] = list(properties)
         return schema
 
@@ -149,8 +127,8 @@ class _Builder:
         if typename == "octet":
             return {"type": "integer", "minimum": 0, "maximum": 255}
         if typename in ("float", "double"):
-            # Nullable in both directions: NaN and the infinities are written as null, and
-            # null is read back as NaN, so a response body round-trips as a request body.
+            # Nullable both ways: NaN and the infinities are written as null and read back as
+            # NaN, so a response body round-trips as a request body.
             return {
                 "type": ["number", "null"],
                 "format": "float" if typename == "float" else "double",

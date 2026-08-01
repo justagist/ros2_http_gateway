@@ -4,15 +4,9 @@ Everything here runs on ROS-owned threads. Nothing in this module touches the as
 and nothing on the asyncio side calls into rclpy except through :meth:`RosRuntime.publish`,
 which hands the message to a worker thread and returns immediately.
 
-Two findings from measuring the runtime shaped this file:
-
-* ``rclpy.experimental.EventsExecutor`` is a *factory function*, not a class, and it takes
-  a keyword-only ``context``. Both executors are therefore constructed the same way.
-* That executor raises ``RuntimeError: Guard conditions not supported``, which kills the
-  spin thread. A guard condition is the obvious way to wake the ROS side when the asyncio
-  side wants something published, so publishing instead goes through a dedicated worker
-  thread blocking on a queue. That works identically under both executors and keeps the
-  publish call off the event loop, which was the actual requirement.
+``EventsExecutor`` raises ``RuntimeError: Guard conditions not supported``, so the obvious way
+to wake the ROS side for a publish is unavailable; publishing goes through a worker thread
+blocking on a queue instead, which behaves the same under both executors.
 """
 
 from __future__ import annotations
@@ -73,7 +67,7 @@ class _Outgoing:
 
 def _settle(target: asyncio.Future[Any], source: Any) -> None:
     """Move an rclpy future's outcome onto an asyncio future, on the loop thread."""
-    if target.done():  # the call already timed out and gave up on this response
+    if target.done():  # already timed out and gave up on this response
         return
     try:
         target.set_result(source.result())
@@ -84,22 +78,11 @@ def _settle(target: asyncio.Future[Any], source: Any) -> None:
 def qos_profile(preset: QosPreset) -> Any:
     """Map a config QoS preset onto an rclpy profile.
 
-    Reliability is the reason this option exists: a RELIABLE subscription simply does not
-    match a BEST_EFFORT publisher, which is how nearly every sensor publishes. Without a way
-    to say ``sensor_data``, pointing an endpoint at a camera would give an endlessly empty
-    cache with nothing anywhere explaining why.
-
-    Args:
-        preset: ``default`` or ``sensor_data``.
-
-    Returns:
-        The rclpy QoS profile to subscribe or publish with.
+    Reliability is why this option exists: a RELIABLE subscription does not match a BEST_EFFORT
+    publisher, which is how nearly every sensor publishes.
     """
-    # Built from the primitives rather than from QoSPresetProfiles, whose membership varies
-    # by distro: Humble has no DEFAULT member, so reading it there is an AttributeError at
-    # startup. QoSProfile(depth=10) is byte-for-byte what DEFAULT is on the distros that do
-    # have it (verified: reliable, volatile, keep-last, depth 10), and
-    # qos_profile_sensor_data has existed for as long as rclpy has.
+    # Not QoSPresetProfiles: Humble has no DEFAULT member. QoSProfile(depth=10) is what DEFAULT
+    # carries on the distros that do have it.
     from rclpy.qos import QoSProfile, qos_profile_sensor_data
 
     if preset == "sensor_data":
@@ -110,16 +93,8 @@ def qos_profile(preset: QosPreset) -> Any:
 def make_executor(kind: Executor, context: Any) -> tuple[Any, str]:
     """Build the executor named by the config, feature-detecting the events one.
 
-    Args:
-        kind: ``auto``, ``events`` or ``multithreaded``.
-        context: The rclpy context the executor belongs to.
-
-    Returns:
-        The executor and the name to log.
-
-    Raises:
-        ImportError: If ``events`` was asked for on a distro without it. ``auto`` falls back
-            instead, which is the whole point of the two spellings.
+    Returns the executor and the name to log. Raises ImportError if ``events`` was asked for on a
+    distro without it; ``auto`` falls back instead.
     """
     from rclpy.executors import MultiThreadedExecutor
 
@@ -131,19 +106,14 @@ def make_executor(kind: Executor, context: Any) -> tuple[Any, str]:
                 raise
             _LOG.info("EventsExecutor is not available on this distro, using MultiThreadedExecutor")
             return MultiThreadedExecutor(context=context), "MultiThreadedExecutor"
-        # A factory function on the distros that have it, so this is a call and not a
-        # constructor; do not be tempted to subclass it.
+        # A factory function, not a class: this is a call, not a constructor.
         return EventsExecutor(context=context), "EventsExecutor"
 
     return MultiThreadedExecutor(context=context), "MultiThreadedExecutor"
 
 
 class RosRuntime:
-    """Owns the rclpy context, node, executor and the threads they run on.
-
-    Args:
-        resolved: A fully resolved configuration.
-    """
+    """Owns the rclpy context, node, executor and the threads they run on."""
 
     __slots__ = (
         "_action_clients",
@@ -191,12 +161,7 @@ class RosRuntime:
         return self._node
 
     def start(self) -> None:
-        """Create everything and begin spinning.
-
-        Raises:
-            ConfigError: If ``ros.executor: events`` was requested on a distro that has no
-                EventsExecutor.
-        """
+        """Create everything and begin spinning."""
         import rclpy
         from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
@@ -211,9 +176,8 @@ class RosRuntime:
                     endpoint.message_type, endpoint.to_dict, endpoint.config.stale_after_ms
                 )
                 self.caches[path] = cache
-                # One callback group per subscription: callbacks for the same topic stay
-                # serialised, which is what lets the cache increment its sequence number
-                # without a lock, while different topics still run in parallel.
+                # One group per subscription: same-topic callbacks stay serialised, which is
+                # what lets the cache swap without a lock, while topics still run in parallel.
                 self._node.create_subscription(
                     endpoint.message_type,
                     endpoint.ros_name,
@@ -254,9 +218,8 @@ class RosRuntime:
                 from rclpy.action import ActionClient
                 from rclpy.callback_groups import ReentrantCallbackGroup
 
-                # Reentrant, not mutually exclusive: a goal's feedback, status and result
-                # callbacks overlap, and serialising them against one another deadlocks the
-                # result future behind feedback that is still arriving.
+                # Reentrant, not mutually exclusive: serialising a goal's feedback, status and
+                # result callbacks deadlocks the result future behind arriving feedback.
                 self._action_clients[path] = ActionClient(
                     self._node,
                     endpoint.interface,
@@ -300,13 +263,7 @@ class RosRuntime:
     def publish(self, path: str, message: Any) -> bool:
         """Hand a message to the ROS side for publishing. Returns immediately.
 
-        Args:
-            path: The endpoint key, which selects the publisher.
-            message: The message instance to publish.
-
-        Returns:
-            True if the message was queued, False if the queue is full, which means a
-            client is publishing faster than the ROS side can drain.
+        False means the queue is full, i.e. a client is publishing faster than ROS drains.
         """
         try:
             self._outbox.put_nowait(_Outgoing(self._publishers[path], message))
@@ -323,22 +280,8 @@ class RosRuntime:
     async def call_service(self, path: str, request: Any, timeout_s: float) -> Any:
         """Call a service from the event loop without blocking it.
 
-        rclpy futures are not asyncio futures, so the response is handed across by a done
-        callback that schedules the result onto the loop. Verified to work under both
-        executors, unlike guard conditions.
-
-        Args:
-            path: The endpoint key, which selects the client.
-            request: The request message.
-            timeout_s: How long to wait before giving up.
-
-        Returns:
-            The response message.
-
-        Raises:
-            ServiceUnavailableError: If no server is offering the service.
-            ServiceTimeoutError: If it does not answer in time. The pending request is withdrawn,
-                so a late reply cannot be mistaken for the answer to a later call.
+        On timeout the pending request is withdrawn, so a late reply cannot be mistaken for the
+        answer to a later call.
         """
         client = self._clients[path]
         if not client.service_is_ready():
@@ -349,7 +292,7 @@ class RosRuntime:
         ros_future = client.call_async(request)
 
         def on_done(future: Any) -> None:
-            # Runs on a ROS callback thread, so nothing here may touch the loop directly.
+            # A ROS callback thread: nothing here may touch the loop directly.
             loop.call_soon_threadsafe(_settle, settled, future)
 
         ros_future.add_done_callback(on_done)
@@ -367,16 +310,8 @@ class RosRuntime:
     async def send_goal(self, path: str, goal: Any, feedback: Any = None) -> Any:
         """Submit a goal and wait for the server to accept or reject it.
 
-        Args:
-            path: The endpoint key, which selects the client.
-            goal: The goal message.
-            feedback: Callback for feedback messages. Invoked on a ROS thread.
-
-        Returns:
-            The goal handle. ``handle.accepted`` says whether the server took it.
-
-        Raises:
-            ActionUnavailableError: If no server is offering the action.
+        ``feedback`` is invoked on a ROS thread. Returns the goal handle, whose ``accepted``
+        says whether the server took it.
         """
         client = self._action_clients[path]
         if not client.server_is_ready():
@@ -394,8 +329,7 @@ class RosRuntime:
     async def _bridge(self, ros_future: Any) -> Any:
         """Await an rclpy future on the event loop.
 
-        rclpy futures are not awaitable, so the outcome is carried across by a done callback
-        that schedules it onto the loop. Verified under both executors.
+        rclpy futures are not awaitable, so a done callback schedules the outcome onto the loop.
         """
         loop = asyncio.get_running_loop()
         settled: asyncio.Future[Any] = loop.create_future()
@@ -452,12 +386,9 @@ class RosRuntime:
     def _warn_about_unmatched(self) -> None:
         """Say something once if a subscription has found no publisher.
 
-        An unmatched subscription is silent by nature: the cache stays empty, every read
-        answers ``"stale": true``, and nothing anywhere says why. The usual causes are a
-        misspelled topic name and a QoS mismatch, so both get named.
-
-        Waits on the stop event rather than sleeping, so shutting down does not have to wait
-        for the delay to elapse.
+        An unmatched subscription is otherwise silent: the cache stays empty and every read
+        answers ``"stale": true`` with nothing saying why. Waits on the stop event rather than
+        sleeping so shutdown need not wait out the delay.
         """
         if self._stopping.wait(timeout=_MATCH_WARN_AFTER_S):
             return
@@ -478,9 +409,8 @@ class RosRuntime:
     def _publish_worker(self) -> None:
         """Drain the outbox onto ROS publishers.
 
-        A dedicated thread rather than an executor wakeup, because the events executor does
-        not support guard conditions. Blocking on the queue also means an idle gateway does
-        no work at all, which a polling timer could not manage.
+        A thread rather than an executor wakeup, because the events executor has no guard
+        conditions; blocking on the queue also means an idle gateway does no work at all.
         """
         while True:
             try:

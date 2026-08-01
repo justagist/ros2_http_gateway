@@ -61,13 +61,9 @@ def _json_round_trip(value: object) -> object:
 def assert_identical(cls: type, original: object, rebuilt: object) -> None:
     """Assert two messages are indistinguishable, field by field.
 
-    Deliberately not ``serialize_message(a) == serialize_message(b)``. CDR pads between
-    fields of differing widths and rosidl leaves that padding uninitialised, so two
-    independently built messages can differ in bytes no field maps to. Measured on
-    ``test_msgs/BasicTypes``: bytes 26-27 differed about once in two hundred attempts once the
-    heap was churned in between, which showed up as a rare unexplained failure in a full run.
-    An earlier version of this helper only worked around the field-less-message case, which is
-    the same bug with a narrower trigger.
+    Not ``serialize_message(a) == serialize_message(b)``: CDR pads between fields of differing
+    widths and rosidl leaves that padding uninitialised, so two independently built messages can
+    differ in bytes no field maps to. See :func:`ros_fixtures.assert_messages_equal`.
     """
     del cls  # the comparison reads the types off the instances
     assert_messages_equal(original, rebuilt)
@@ -271,10 +267,9 @@ def test_nan_and_infinity_encode_as_null() -> None:
 def test_a_string_is_not_a_number_or_a_boolean_in_a_body(field: str, value: str) -> None:
     """Keeps the write schemas honest.
 
-    Accepting "1.25" for a double would mean the generated JSON Schema had to advertise
-    ["number","string"] on every numeric field, and an OpenAPI-validating client would then
-    be entitled to send text where the schema says number. Path parameters are strings, and
-    are coerced against their target field before reaching a converter.
+    Accepting "1.25" for a double would force the generated schema to advertise
+    ["number","string"] on every numeric field. Path parameters are coerced against their target
+    field before reaching a converter instead.
     """
     cls = get_message("test_msgs/msg/BasicTypes")
     with pytest.raises(ConversionError):

@@ -526,12 +526,11 @@ def test_creating_a_goal_sweeps_the_expired_ones() -> None:
 
 
 def test_a_full_queue_still_receives_the_terminal_sentinel() -> None:
-    """The bug this pins: the sentinel used a bare put_nowait and could raise QueueFull.
+    """A full queue must still close its stream.
 
-    A queue already at maxsize accepts the terminal frame by dropping its oldest and is then
-    full again, so the sentinel raised, the exception escaped into the result task, and every
-    subscriber after the full one got neither frame nor sentinel -- their streams staying open
-    until the connection died. Two subscribers, the first deliberately full: both must close.
+    The sentinel once used a bare put_nowait: a queue at maxsize accepts the terminal frame by
+    dropping its oldest and is full again, so the sentinel raised and every later subscriber got
+    neither frame nor sentinel. Two subscribers, the first deliberately full: both must close.
     """
     registry = GoalRegistry(ttl_s=300.0)
     record = registry.create("/pick")

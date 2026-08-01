@@ -1,15 +1,10 @@
 """Serving: bring up ROS, run uvicorn, tear both down in the right order.
 
-Shutdown order is the part worth stating, and it is not where you would first put it.
-uvicorn owns SIGINT and SIGTERM; on either it stops accepting, lets in-flight requests
-finish, then runs the lifespan shutdown. So the ROS side is torn down *in the lifespan*,
-after the last request has been answered and the audit queue flushed.
-
-The obvious arrangement -- clean up after ``server.run()`` returns -- silently does not work.
+The ROS side is torn down *in the lifespan*, after the last request is answered and the audit
+queue flushed. Cleaning up after ``server.run()`` returns instead silently does not work:
 uvicorn restores the default signal handler and re-raises the captured signal as ``run()``
-unwinds, so the process dies inside that call and anything after it never executes. Measured,
-not assumed: the node was left undestroyed and no shutdown line was logged. The ``finally``
-below is kept only as an idempotent safety net for the paths that do return normally.
+unwinds, so the process dies inside that call. The ``finally`` below is an idempotent safety
+net for the paths that do return normally.
 """
 
 from __future__ import annotations
@@ -33,8 +28,8 @@ _LOG = logging.getLogger(__name__)
 
 __all__ = ["serve"]
 
-# Declared dependencies, so asking for them by name rather than "auto" makes a missing one
-# a loud failure instead of a silent fallback to the slower pure-Python implementations.
+# Declared dependencies, named rather than "auto" so a missing one is loud instead of a silent
+# fallback to the slower pure-Python implementations.
 _LOOP: Final = "uvloop"
 _HTTP: Final = "httptools"
 
@@ -43,14 +38,7 @@ _EXIT_INTERRUPTED: Final = 130
 
 
 def serve(resolved: ResolvedConfig) -> int:
-    """Run the gateway until interrupted.
-
-    Args:
-        resolved: A validated, type-resolved configuration.
-
-    Returns:
-        Process exit code.
-    """
+    """Run the gateway until interrupted, returning the process exit code."""
     http = resolved.config.http
     runtime = RosRuntime(resolved)
     runtime.start()
@@ -72,8 +60,8 @@ def serve(resolved: ResolvedConfig) -> int:
                 loop=_LOOP,
                 http=_HTTP,
                 lifespan="on",
-                # The audit log is the request record; a second, less informative one that
-                # cannot be pointed at a file is not worth the write.
+                # The audit log is the request record; a second, less informative one is not
+                # worth the write.
                 access_log=False,
                 log_config=None,
             )
@@ -81,9 +69,8 @@ def serve(resolved: ResolvedConfig) -> int:
         try:
             server.run()
         except KeyboardInterrupt:
-            # uvicorn restores the default SIGINT handler and re-raises, so without this an
-            # operator pressing Ctrl-C gets a traceback out of asyncio.runners for what is a
-            # completely ordinary way to stop a server.
+            # uvicorn re-raises, so without this Ctrl-C prints a traceback out of
+            # asyncio.runners for an ordinary way to stop a server.
             _LOG.info("interrupted")
             return _EXIT_INTERRUPTED
     finally:
@@ -101,8 +88,7 @@ def _build(resolved: ResolvedConfig, runtime: RosRuntime, audit: AuditLogger) ->
             yield
         finally:
             await audit.stop()
-            # In a thread: stopping the runtime joins the ROS threads, and blocking the
-            # event loop for that is unnecessary even during shutdown.
+            # In a thread: stopping the runtime joins the ROS threads.
             await asyncio.get_running_loop().run_in_executor(None, runtime.stop)
 
     return build_app(

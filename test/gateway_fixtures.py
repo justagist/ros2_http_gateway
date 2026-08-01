@@ -29,30 +29,17 @@ EXECUTOR_ENV = "GATEWAY_TEST_EXECUTOR"
 def events_executor_available() -> bool:
     """Whether this distro provides ``rclpy.experimental.EventsExecutor`` at all.
 
-    Deliberately distinct from :func:`available_executors`, which the CI matrix narrows through
-    the environment. A run restricted to ``multithreaded`` on a distro that does have the events
-    executor must not conclude the distro lacks it.
-
-    Returns:
-        True when the module is importable.
+    Distinct from :func:`available_executors`, which the CI matrix narrows through the
+    environment: a run restricted to ``multithreaded`` must not conclude the distro lacks it.
     """
     return importlib.util.find_spec("rclpy.experimental") is not None
 
 
 def available_executors() -> list[str]:
-    """Which executors this distro can actually run.
+    """Which executors this distro can actually run, never empty.
 
-    Humble has no ``rclpy.experimental``, so parametrising over ``events`` there would only
-    assert that our own startup error fires -- which
-    ``test_events_requested_but_missing_is_a_startup_error`` already does deliberately, with a
-    simulated import failure, on every distro.
-
-    ``GATEWAY_TEST_EXECUTOR`` narrows the list further. That is how the CI matrix runs a distro
-    once per executor rather than both in a single job; a request for something this distro
-    cannot provide is ignored rather than silently skipping the tests.
-
-    Returns:
-        Executor names to parametrise over, never empty.
+    ``GATEWAY_TEST_EXECUTOR`` narrows the list, which is how the CI matrix runs a distro once per
+    executor; a request this distro cannot provide is ignored rather than skipping the tests.
     """
     available = ["multithreaded"]
     if events_executor_available():
@@ -81,9 +68,8 @@ def config_document(**overrides: Any) -> dict[str, Any]:
                 "topic": STATE_TOPIC,
                 "type": "example_interfaces/msg/String",
                 "roles": ["viewer", "operator"],
-                # Comfortably longer than wait_until_quiet's settle window, so that waiting
-                # for the publisher to go quiet does not itself age the sample past the
-                # threshold before the "fresh" reading is taken.
+                # Longer than wait_until_quiet's settle window, so waiting for the publisher
+                # to go quiet does not itself age the sample past the threshold.
                 "stale_after_ms": 1000,
             },
             "/never/stales": {
@@ -114,8 +100,8 @@ def config_document(**overrides: Any) -> dict[str, Any]:
                 {"token": VIEWER_TOKEN, "user": "viewer-user", "roles": ["viewer"]},
             ]
         },
-        # Never bound by the app-level tests, which drive the ASGI app directly. The
-        # serving test picks a free port for itself.
+        # Never bound: the app-level tests drive the ASGI app directly and the serving test
+        # picks a free port.
         "http": {"bind": "127.0.0.1", "port": 8080},
         "audit": {"sink": "stderr"},
     }
@@ -183,18 +169,9 @@ class Talker:
     def wait_until_quiet(self, cache: Any, settle_s: float = 0.3, timeout: float = 10.0) -> int:
         """Wait until no new sample has arrived for ``settle_s``, and return the final seq.
 
-        :meth:`publish_until` stops as soon as the first sample lands, but the publishes it
-        already made are still in flight. A test that then asserts "the sample did not change"
-        is racing them, which is how test_read_returns_fresh_data_then_goes_stale failed on two
-        CI legs while passing everywhere else.
-
-        Args:
-            cache: The topic cache to watch.
-            settle_s: How long the sequence number must hold still.
-            timeout: Give up after this long and return whatever it has reached.
-
-        Returns:
-            The sequence number once it has stopped moving.
+        :meth:`publish_until` returns as soon as the first sample lands, with its other publishes
+        still in flight, so a test asserting "the sample did not change" would be racing them.
+        Gives up after ``timeout`` and returns whatever it reached.
         """
         deadline = time.monotonic() + timeout
         last = cache.seq

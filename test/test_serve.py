@@ -156,9 +156,8 @@ def test_a_signal_shuts_down_cleanly_and_destroys_the_node(
         output = gateway.collect()
 
     assert "ROS runtime stopped" in output, f"the node was never destroyed:\n{output}"
-    # The node is destroyed inside the lifespan shutdown, which uvicorn only enters once it
-    # has stopped accepting and drained in-flight requests. So the ordering that matters is
-    # "waiting for shutdown" -> node destroyed -> "shutdown complete".
+    # The node is destroyed in the lifespan shutdown, which uvicorn enters only after draining,
+    # so the ordering that matters is "waiting for shutdown" -> destroyed -> "shutdown complete".
     for marker in ("Waiting for application shutdown", "Application shutdown complete"):
         assert marker in output, f"missing {marker!r}:\n{output}"
     assert (
@@ -176,15 +175,11 @@ def test_a_signal_shuts_down_cleanly_and_destroys_the_node(
 def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
     """Informational soak: a 1 kHz subscription with no HTTP traffic.
 
-    The brief's figure is under 5% of one core. That is not reachable in rclpy and this test
-    warns rather than fails, which is what the brief asks for. Measured on this machine at
-    ~900 msg/s: the gateway takes 17.2% of a core, and a bare rclpy raw subscriber whose
-    callback only increments an integer takes 17.7%. The cost is rmw_zenoh plus rclpy's
-    per-message Python callback dispatch; the cache is not visible in it.
-
-    So the number to watch is not 5%, it is "no worse than a do-nothing subscriber". If this
-    ever climbs well above the floor, the cache has started doing real work per message,
-    which is precisely what raw=True and the memoised encoding exist to prevent.
+    The brief's under-5%-of-a-core figure is not reachable in rclpy, so this warns rather than
+    fails. Measured at ~900 msg/s: the gateway takes 17.2% of a core and a bare raw subscriber
+    whose callback only increments an integer takes 17.7%, the cost being rmw_zenoh plus rclpy's
+    per-message dispatch. The number to watch is therefore "no worse than a do-nothing
+    subscriber", which is what raw=True and the memoised encoding exist to hold.
     """
     ticks = os.sysconf("SC_CLK_TCK")
 
@@ -192,9 +187,8 @@ def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
         fields = Path(f"/proc/{pid}/stat").read_text().split()
         return (int(fields[13]) + int(fields[14])) / ticks
 
-    # One subscription, not the fixture's two on the same topic: the brief's figure is for
-    # "a 1 kHz small-msg subscription", and measuring two callbacks per message would be
-    # answering a different question.
+    # One subscription, not the fixture's two on the same topic: two callbacks per message
+    # would answer a different question.
     single_endpoint = {
         "/mission/status": {
             "topic": STATE_TOPIC,

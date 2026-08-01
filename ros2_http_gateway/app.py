@@ -1,9 +1,8 @@
 """The HTTP surface: routes built from the config, nothing discovered at runtime.
 
-Auth, policy and audit are applied by wrapping each handler in a closure that already holds
-its endpoint's configuration, rather than by middleware. Middleware would have to work out
-which endpoint a request belongs to in order to know the required roles, and would then have
-to agree with the router about it; a closure per route simply knows.
+Auth, policy and audit wrap each handler in a closure holding its endpoint's configuration
+rather than sitting in middleware, which would have to rediscover which endpoint a request
+belongs to and then agree with the router about it.
 
 Status codes follow the taxonomy in docs/protocol.md: 4xx means the request never crossed
 into ROS, 200 means it did and the body carries the outcome. Both use one envelope shape.
@@ -54,8 +53,8 @@ _ORJSON_OPTS: Final = orjson.OPT_SERIALIZE_NUMPY
 _SSE_HEADERS: Final = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
-    # Squarely aimed at nginx, which buffers a streaming response by default and would hold
-    # feedback until the goal finished.
+    # For nginx, which buffers streaming responses by default and would hold feedback until
+    # the goal finished.
     "X-Accel-Buffering": "no",
 }
 
@@ -69,9 +68,8 @@ def _json(payload: Any, status: int = 200) -> Response:
 class _ErrorResponse(Response):
     """A JSON error response that remembers its code.
 
-    The audit wrapper needs the ``error_code`` it gave the client. Carrying it on the
-    response beats parsing the body back out, which would cost a JSON decode per failed
-    request and would quietly break the day a handler returns a body shaped differently.
+    The audit wrapper needs the ``error_code`` the client was given; carrying it here beats
+    decoding the body back out.
     """
 
     def __init__(self, status: int, error_code: str, payload: dict[str, Any]) -> None:
@@ -107,16 +105,8 @@ def build_app(
 ) -> Starlette:
     """Build the ASGI application for a resolved configuration.
 
-    Args:
-        resolved: The validated, type-resolved config.
-        runtime: The started ROS runtime holding the caches and publishers.
-        audit: Audit logger; already started, or started by ``lifespan``.
-        authenticator: Turns bearer tokens into identities.
-        lifespan: Optional Starlette lifespan context manager. The serving path uses it to
-            start and stop the audit writer; tests manage the logger themselves.
-
-    Returns:
-        The application, with every configured route registered.
+    The serving path passes a ``lifespan`` to start and stop the audit writer; tests manage the
+    logger themselves.
     """
     policy = build_policy(
         {path: e.config.preconditions for path, e in resolved.endpoints.items()},
@@ -142,9 +132,8 @@ def _endpoint_routes(
 ) -> Iterator[Route]:
     """Yield one route per configured endpoint, most specific path first.
 
-    Literal segments are registered ahead of templated ones so that, where the config
-    engine has allowed both to coexist on different methods, matching does not depend on
-    dictionary order.
+    Literal segments register ahead of templated ones, so where the config engine allows both to
+    coexist on different methods, matching does not depend on dict order.
     """
     ordered = sorted(
         resolved.endpoints.items(),
@@ -170,9 +159,8 @@ def _action_routes(
 ) -> Iterator[Route]:
     """The four routes an action endpoint generates.
 
-    Only the submit route is subject to preconditions. Applying them to cancel would let a
-    state gate stop an operator aborting a goal, which is precisely backwards; status and
-    stream change nothing.
+    Only submit is gated by preconditions: a state gate able to stop an operator aborting a goal
+    would be precisely backwards, and status and stream change nothing.
     """
     path = endpoint.config.path
     empty = PolicyEngine({})
@@ -222,15 +210,12 @@ def _guard(
 ) -> Handler:
     """Wrap a handler with authentication, the role check, policy, timing and audit.
 
-    Preconditions are evaluated here rather than inside the handler so that every refusal --
-    unauthenticated, wrong role, or forbidden by the robot's state -- is recorded the same
-    way: ``decision: deny`` with the reason. A precondition refusal is still a 200, because
-    the request was well formed and authorised; it simply must not proceed.
+    Preconditions are evaluated here, not in the handler, so every refusal is recorded the same
+    way: ``decision: deny`` with the reason. A precondition refusal is still a 200, because the
+    request was well formed and authorised.
 
-    One audit record per request that reaches a configured route: allowed, denied, or failed
-    inside the handler. A request that matches no route is Starlette's 404 and is not audited,
-    which is a deliberate gap recorded in docs/security.md -- path-scanning probes therefore
-    leave no trace in the audit file.
+    One record per request reaching a configured route. A request matching no route is
+    Starlette's 404 and is not audited -- a deliberate gap recorded in docs/security.md.
     """
     required = endpoint.config.roles
 
@@ -270,10 +255,8 @@ def _guard(
                 try:
                     response = await handler(request)
                 except Exception:
-                    # The 500 path is the one an incident review most wants to see, and
-                    # letting the exception reach Starlette's error machinery would leave no
-                    # record at all. Logged with its traceback, audited, and answered with the
-                    # same envelope as everything else rather than an HTML error page.
+                    # Letting this reach Starlette's error machinery would leave no audit record
+                    # of the one case an incident review most wants, and answer with HTML.
                     _LOG.exception("handler for %s failed", request.url.path)
                     response = _error(500, "INTERNAL", "the gateway failed to handle this request")
 
@@ -310,10 +293,9 @@ def _endpoint_handler(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handle
 def _service_call(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
     """POST a body, call the service, return its response.
 
-    ``success`` describes the call, not the robot's opinion of it: a service that answers
-    ``success: false`` in its own response still produces a 200 with ``"success": true`` here
-    and its own fields under ``response``. Conflating the two would make it impossible for a
-    client to tell "the gateway could not ask" from "the robot said no".
+    ``success`` describes the call, not the robot's opinion of it: a service answering
+    ``success: false`` still produces ``"success": true`` here with its own fields under
+    ``response``, so a client can tell "could not ask" from "the robot said no".
     """
     path = endpoint.config.path
     from_dict = endpoint.from_dict
@@ -371,8 +353,8 @@ def _service_call(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
 def _topic_read(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
     """GET the newest cached sample.
 
-    The whole body comes from the cache, which memoises the encoded payload by sequence
-    number, so repeated reads between two messages re-encode nothing.
+    The whole body comes from the cache, which memoises by sequence number, so repeated reads
+    between two messages re-encode nothing.
     """
     path = endpoint.config.path
 
@@ -383,11 +365,7 @@ def _topic_read(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
 
 
 def _topic_write(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
-    """POST a body to be published.
-
-    Returns as soon as the message is queued for the ROS side. Waiting for subscribers is
-    not something a publisher can do, so pretending otherwise would be a lie.
-    """
+    """POST a body to be published, returning once it is queued for the ROS side."""
     path = endpoint.config.path
     from_dict = endpoint.from_dict
     assert from_dict is not None, "a topic write endpoint always has a decoder"
@@ -423,9 +401,8 @@ def _topic_write(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
 def _goal_submit(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalRegistry) -> Handler:
     """POST a goal. 202 with its id once the server accepts it.
 
-    202 rather than 200 because the work has been accepted and not performed; the id is the
-    client's handle on it. A server that refuses the goal is a 200 with ``GOAL_REJECTED``: the
-    request was fine and reached ROS, which answered no.
+    202 because the work is accepted, not performed. A refused goal is a 200 with
+    ``GOAL_REJECTED``: the request reached ROS, which answered no.
     """
     path = endpoint.config.path
     from_dict = endpoint.from_dict
@@ -450,8 +427,8 @@ def _goal_submit(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalReg
         record = goals.create(path)
 
         def on_feedback(message: Any) -> None:
-            # A ROS callback thread. Encoding happens here, once per message however many
-            # listeners there are; only the handover is scheduled onto the loop.
+            # A ROS callback thread. Encode here, once per message however many listeners;
+            # only the handover crosses to the loop.
             encoded = encode_feedback(feedback_to_dict, message)
             loop.call_soon_threadsafe(goals.on_feedback, record, encoded)
 
@@ -486,8 +463,7 @@ async def _await_result(
 ) -> None:
     """Wait for a goal to finish, then record it and close its streams.
 
-    Held on the record so the task is not garbage collected mid-flight, which is the classic
-    way a fire-and-forget asyncio task disappears.
+    The task is held on the record so it is not garbage collected mid-flight.
     """
     try:
         outcome = await runtime.goal_result(record.handle)
@@ -522,7 +498,6 @@ def _goal_stream(endpoint: ResolvedEndpoint, goals: GoalRegistry) -> Handler:
             return _error(404, "UNKNOWN_GOAL", "no such goal, or its result has been evicted")
 
         if record.is_terminal:
-            # Nothing more will ever arrive, so answer with the ending and be done.
             return StreamingResponse(
                 _single_frame(terminal_frame(record.status, record.result)),
                 media_type="text/event-stream",
@@ -551,11 +526,7 @@ async def _single_frame(frame: bytes) -> AsyncIterator[bytes]:
 
 
 def _goal_cancel(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalRegistry) -> Handler:
-    """DELETE a goal: ask the server to cancel it.
-
-    Deliberately not gated by preconditions. A state gate that could stop an operator aborting
-    a goal would be the opposite of a safety feature.
-    """
+    """DELETE a goal: ask the server to cancel it. Never gated by preconditions."""
     path = endpoint.config.path
 
     async def cancel(request: Request) -> Response:

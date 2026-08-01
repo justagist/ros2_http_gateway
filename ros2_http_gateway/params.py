@@ -1,13 +1,12 @@
 """``request_map``: filling service request fields from path parameters.
 
-A path parameter is always text. Request bodies, on the other hand, are read strictly -- a
-JSON number has to be a number -- so the substituted text is coerced against the field it
-targets *before* the body converter sees it. Doing it here rather than by loosening every
-scalar is what lets the generated JSON Schemas stay honest: they never have to tell a client
-that any number anywhere might arrive as a string.
+A path parameter is always text, but request bodies are read strictly, so substituted text is
+coerced against its target field *before* the body converter sees it. Doing it here rather than
+by loosening every scalar keeps the generated JSON Schemas honest: they never have to advertise
+that any number might arrive as a string.
 
-The coercion for each target is chosen once, at startup, from the field's declared type. By
-request time this is a substitution and a call.
+Each coercion is chosen at startup from the field's declared type, so request time is a
+substitution and a call.
 """
 
 from __future__ import annotations
@@ -36,10 +35,8 @@ _PARAM_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _TRUE: Final = frozenset({"true", "1", "yes", "on"})
 _FALSE: Final = frozenset({"false", "0", "no", "off"})
 
-# int() and float() accept more than a URL segment should be allowed to mean: "1_000" becomes
-# 1000, full-width Unicode digits parse, and float() returns NaN for "nan" and infinity for
-# "inf". None of it is unsafe, since the body converter still range-checks, but /math/1_0/plus/2
-# silently meaning 10 is a surprise and a NaN arriving from a URL is worse.
+# int() and float() accept more than a URL segment should mean: "1_000" becomes 1000, full-width
+# Unicode digits parse, and float() takes "nan" and "inf".
 _INTEGER_RE: Final = re.compile(r"^[+-]?[0-9]+$")
 _NUMBER_RE: Final = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 
@@ -66,16 +63,8 @@ def template_parameters(template: str) -> tuple[str, ...]:
 def coercer_for(slot: Any, label: str) -> Callable[[str], Any]:
     """Build the text-to-value conversion for a request field.
 
-    Args:
-        slot: The field's ``rosidl_parser.definition`` type.
-        label: Dotted field path, used in error messages.
-
-    Returns:
-        A callable turning the substituted text into a value the body converter accepts.
-
-    Raises:
-        UnsupportedTargetError: If the field is a message, a collection, or a type that text
-            cannot fill unambiguously. Failing at startup beats a confusing 400 later.
+    Raises :class:`UnsupportedTargetError` for a message, a collection or anything else text
+    cannot fill unambiguously; failing at startup beats a confusing 400 later.
     """
     if isinstance(slot, AbstractGenericString):
         return lambda text: text
@@ -96,8 +85,6 @@ def coercer_for(slot: Any, label: str) -> Callable[[str], Any]:
         return _to_bool_text
     if name in ("float", "double"):
         return _to_float_text
-    if name == "octet":
-        return _to_int_text
     return _to_int_text
 
 
@@ -127,25 +114,13 @@ def apply_bindings(
 ) -> dict[str, Any]:
     """Fill mapped fields into a request body from the path parameters.
 
-    Mutates and returns ``body``: a ``request_map`` entry takes precedence over the same field
-    given in the body, because the URL is the more specific statement of intent.
-
-    Args:
-        bindings: The endpoint's resolved bindings.
-        body: The decoded request body, which may be empty.
-        params: Path parameters as matched by the router.
-
-    Returns:
-        The same dict, with mapped fields set.
-
-    Raises:
-        ValueError: If a substituted value will not convert to the target field's type.
+    Mutates and returns ``body``: a ``request_map`` entry beats the same field given in the body,
+    because the URL is the more specific statement of intent. Raises ValueError if a substituted
+    value will not convert to its target field's type.
     """
     for binding in bindings:
-        # Raises rather than substituting "": resolve has already checked every template
-        # parameter is a path parameter and the router supplies all of them, so this cannot
-        # trigger. If that invariant ever breaks a 500 is the honest answer, not a field
-        # quietly filled with the coercion of an empty string.
+        # KeyError rather than substituting "": resolve has checked every template parameter is
+        # a path parameter, so if that invariant breaks a 500 is the honest answer.
         text = _PARAM_RE.sub(lambda match: params[match.group(1)], binding.template)
         try:
             value = binding.coerce(text)

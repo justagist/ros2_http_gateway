@@ -5,9 +5,9 @@ and emits Python source for a dedicated converter, which is then ``compile()``d 
 closure. Runtime conversion is therefore straight attribute access and literal dict
 construction, with no introspection, no ``getattr`` chains and no per-field dispatch.
 
-The generated source is deliberately ugly. It is also the hottest code in the gateway,
-so it is exposed through :func:`msg_to_dict_source` and :func:`dict_to_msg_source` and
-verified by golden-file and round-trip tests rather than by reading it.
+The generated source is deliberately ugly, and verified by golden-file and round-trip tests
+rather than by reading it; it is exposed through :func:`msg_to_dict_source` and
+:func:`dict_to_msg_source`.
 
 What the JSON encoding looks like, and why:
 
@@ -18,34 +18,27 @@ What the JSON encoding looks like, and why:
   because values above 2^53 do not survive a JavaScript ``number``. Collections of them
   become arrays of strings.
 * Fixed-size arrays of numerics stay as the numpy arrays rclpy hands over, for orjson's
-  ``OPT_SERIALIZE_NUMPY`` to consume without a copy. Sequences arrive as ``array.array``,
-  which orjson cannot serialise, so they become either a list or a zero-copy numpy view of
-  the same buffer, whichever is faster at that length -- see ``_VIEW_FROM``.
-* ``float32`` sequences always take the numpy view, whatever their length, because the two
-  paths do not produce the same JSON. ``array('f').tolist()`` widens to double and prints
-  ``1.8700000047683716``, while numpy prints the shortest text that round-trips as
-  ``float32``, ``1.87``. Both read back into ``float32`` exactly, but a number whose
-  formatting depended on how many elements happened to be in the sequence would be a
-  hostile API, and fixed-size ``float32[N]`` already emits the numpy form.
+  ``OPT_SERIALIZE_NUMPY``. Sequences arrive as ``array.array``, which orjson cannot serialise,
+  so they become a list or a zero-copy numpy view, whichever is faster at that length -- see
+  ``_VIEW_FROM``.
+* ``float32`` sequences always take the numpy view, because the two paths disagree:
+  ``array('f').tolist()`` widens to double and prints ``1.8700000047683716`` where numpy prints
+  ``1.87``. Formatting must not depend on sequence length, and fixed-size ``float32[N]`` already
+  emits the numpy form.
 * ``float``/``double`` NaN and infinities become JSON ``null``, which is what orjson
   does; ROS has no other way to spell them in JSON. On the way in ``null`` reads back as
   NaN, so a body this gateway produced is always a body it accepts. Not lossless in that
   direction: an infinity read as ``null`` returns as NaN.
 
-Reading a body is otherwise strict, deliberately: a JSON number must be a number and a JSON
-boolean must be a boolean. The single exception is ``int64``/``uint64``, which accept a
-string because ``int64_as_string`` emits one. Path parameters are strings, and are coerced
-against their target field before reaching a converter rather than by loosening every
-scalar -- otherwise the generated JSON Schemas would have to advertise that any number in
-any request body may be a string, and an OpenAPI-validating client would be entitled to send
-one.
+Reading a body is otherwise strict: a JSON number must be a number, a boolean a boolean. The
+one exception is ``int64``/``uint64``, which accept a string because ``int64_as_string`` emits
+one. Path parameters are coerced against their target field before reaching a converter, so the
+generated schemas never have to advertise string-for-number.
 
-Measured on Jazzy, and the reason this file does not trust introspection at runtime:
-rclpy gives numpy arrays for fixed-size numeric arrays, ``array.array`` for numeric
-sequences, ``list`` for boolean, string, octet and message collections, and a one-byte
-``bytes`` for a scalar ``octet``. The generated setters perform no validation in a
-released ROS build, because their asserts are compiled out, so the dict-to-message
-direction validates and coerces here instead of trusting them.
+Measured on Jazzy: rclpy gives numpy arrays for fixed-size numeric arrays, ``array.array`` for
+numeric sequences, ``list`` for boolean, string, octet and message collections, and a one-byte
+``bytes`` for a scalar ``octet``. The generated setters validate nothing in a released build
+(asserts compiled out), so dict-to-message validates and coerces here.
 """
 
 from __future__ import annotations
@@ -89,9 +82,8 @@ MessageClass: TypeAlias = Any
 class ConversionError(ValueError):
     """A JSON value could not be turned into the ROS field it targets.
 
-    The message always begins with the dotted path of the offending field, as the client
-    wrote it, so it can be handed straight to a client in a BAD_REQUEST envelope. The same
-    path is available separately as :attr:`field`.
+    The message begins with the field's dotted path, so it can go straight into a BAD_REQUEST
+    envelope; the path is also on :attr:`field`.
     """
 
     def __init__(self, message: str, *, field: str | None = None) -> None:
@@ -104,16 +96,14 @@ class UnsupportedFieldError(TypeError):
 
 
 # IDL basic type -> (numpy dtype, array.array typecode, inclusive integer range).
-# The typecodes match what rclpy's generated code uses, verified against test_msgs.
+# Typecodes match rclpy's generated code, verified against test_msgs.
 _NUMERIC: Final[dict[str, tuple[str, str, tuple[int, int] | None]]] = {
     "float": ("float32", "f", None),
     "double": ("float64", "d", None),
     "int8": ("int8", "b", (-(2**7), 2**7 - 1)),
     "uint8": ("uint8", "B", (0, 2**8 - 1)),
-    # `char` in a .msg file becomes IDL uint8, which test_msgs exercises and a test pins.
-    # Raw-IDL `wchar` is deliberately absent: 16 bits wide, no interface in the battery has
-    # one, so its Python representation is unverified. Guessing it is how you ship a
-    # converter that looks right and is not.
+    # `char` in a .msg becomes IDL uint8, pinned by a test. Raw-IDL `wchar` is absent on
+    # purpose: 16 bits, unverified representation, so it is refused rather than guessed.
     "char": ("uint8", "B", (0, 2**8 - 1)),
     "int16": ("int16", "h", (-(2**15), 2**15 - 1)),
     "uint16": ("uint16", "H", (0, 2**16 - 1)),
@@ -126,41 +116,21 @@ _WIDE_INTS: Final = frozenset({"int64", "uint64"})
 _FLOATS: Final = frozenset({"float", "double"})
 _BYTE_LIKE: Final = frozenset({"uint8", "char"})
 
-# Length at or above which wrapping a numeric sequence's buffer in a numpy view beats
-# building a Python list. Below it the fixed cost of numpy.frombuffer (~0.45us) dominates;
-# above it the view wins and keeps winning (1.5x at 128 doubles, 3.3x at 8192 int32s).
-# Measured at 64 for float64, int64, int32 and int16 alike on CPython 3.12 + orjson 3.11.
-#
-# Under numpy 1.26 the crossover sits nearer 100 than 64, so between those lengths this picks
-# the view when a list would be around 7% quicker -- 0.12us on a request costing hundreds.
-# Not worth a version check, and noted here so nobody re-measures on one major and "fixes" it.
-# The JSON produced is byte-identical either way, verified across numpy 1.26.4 and 2.5.1 for
-# every dtype the converters emit.
+# Length at or above which a zero-copy numpy view beats building a list: below it
+# numpy.frombuffer's ~0.45us fixed cost dominates, above it the view wins (3.3x at 8192 int32s).
+# Measured at 64 on numpy 2.5; nearer 100 on numpy 1.26, where this costs 0.12us in between.
+# Output is byte-identical either way, so the threshold is a tuning choice, not a contract.
 _VIEW_FROM: Final = 64
 
 
 def iter_fields(msg_type: MessageClass) -> Iterator[tuple[str, Any]]:
-    """Yield ``(field_name, rosidl_slot_type)`` pairs in declaration order.
-
-    Args:
-        msg_type: A generated ROS message class.
-
-    Yields:
-        Field name paired with its ``rosidl_parser.definition`` type object.
-    """
+    """Yield ``(field_name, rosidl_slot_type)`` pairs in declaration order."""
     names = msg_type.get_fields_and_field_types().keys()
     yield from zip(names, msg_type.SLOT_TYPES, strict=True)
 
 
 def type_name_of(msg_type: MessageClass) -> str:
-    """Return the ``pkg/msg/Name`` string for a generated message class.
-
-    Args:
-        msg_type: A generated ROS message class, e.g. ``geometry_msgs.msg.Twist``.
-
-    Returns:
-        The interface name as it appears in a config file.
-    """
+    """Return the ``pkg/msg/Name`` string, as it appears in a config file."""
     parts = msg_type.__module__.split(".")
     return f"{parts[0]}/{parts[1]}/{msg_type.__name__}"
 
@@ -177,10 +147,9 @@ def _nested_type(slot: NamespacedType) -> MessageClass:
 class _ToDictEmitter:
     """Emits the body of a single message-to-dict function.
 
-    Nested messages are inlined rather than delegated, so converting a message costs one
-    Python call however deep the type is. A nested struct accessed for N fields is hoisted
-    into a local first, so it is read once instead of N times -- except inside a list
-    comprehension, where a hoisted local would escape the loop variable's scope.
+    Nested messages are inlined, so a conversion is one Python call however deep the type. A
+    nested struct is hoisted into a local so it is read once -- except inside a comprehension,
+    where the hoist would escape the loop variable's scope.
     """
 
     def __init__(self, *, int64_as_string: bool) -> None:
@@ -281,15 +250,7 @@ class _ToDictEmitter:
 
 
 def msg_to_dict_source(msg_type: MessageClass, *, int64_as_string: bool = True) -> str:
-    """Generate the source of a message-to-dict converter.
-
-    Args:
-        msg_type: A generated ROS message class.
-        int64_as_string: Emit 64-bit integers as JSON strings.
-
-    Returns:
-        Python source defining ``def to_dict(_m):``.
-    """
+    """Generate the source of a message-to-dict converter, defining ``def to_dict(_m):``."""
     emitter = _ToDictEmitter(int64_as_string=int64_as_string)
     body = emitter.struct(msg_type, "_m")
     return "\n".join(["def to_dict(_m):", *emitter.lines, f"    return {body}"]) + "\n"
@@ -300,15 +261,8 @@ def build_msg_to_dict(
 ) -> Callable[[Any], dict[str, Any]]:
     """Compile a converter turning a message instance into a JSON-ready dict.
 
-    The result is not plain JSON: fixed-size numeric arrays stay as numpy arrays so that
-    orjson can serialise them without an intermediate copy.
-
-    Args:
-        msg_type: A generated ROS message class.
-        int64_as_string: Emit 64-bit integers as JSON strings.
-
-    Returns:
-        A single-argument callable. Its source is available as ``__ros_source__``.
+    Not plain JSON: fixed-size numeric arrays stay numpy so orjson needs no copy. The generated
+    source is available as ``__ros_source__``.
     """
     source = msg_to_dict_source(msg_type, int64_as_string=int64_as_string)
     namespace: dict[str, Any] = {"_b64": _b64, "_np": numpy}
@@ -330,16 +284,12 @@ def _b64(raw: bytes) -> str:
 class _ToMsgEmitter:
     """Emits one builder function per (message type, dotted path) reachable from the root.
 
-    This direction delegates instead of inlining: request bodies are cold compared with
-    topic reads, and one function per type keeps collection handling to a single
-    comprehension.
+    Delegates instead of inlining: request bodies are cold, and one function per type keeps
+    collection handling to a single comprehension.
 
-    Builders are keyed by dotted path as well as by type, so every error message can name
-    the field the way the client wrote it -- ``linear.x``, ``status[].values[].key`` -- while
-    keeping every label a compile-time constant, so nothing is formatted on the success
-    path. The cost is one extra function when the same type appears at two paths
-    (``Vector3`` at ``linear`` and at ``angular``), which is cheap on a cold path and pays
-    for itself the first time somebody has to debug a 400.
+    Keyed by dotted path as well as type so error messages name the field as the client wrote it
+    (``status[].values[].key``) while every label stays a compile-time constant. Costs one extra
+    function when a type appears at two paths.
     """
 
     def __init__(self, *, int64_as_string: bool) -> None:
@@ -365,15 +315,7 @@ class _ToMsgEmitter:
         self._loop_depth = 0
 
     def builder_for(self, msg_type: MessageClass, prefix: str = "") -> str:
-        """Return the builder for ``msg_type`` at dotted path ``prefix``, emitting it once.
-
-        Args:
-            msg_type: A generated ROS message class.
-            prefix: Dotted path from the request body to this message, empty at the root.
-
-        Returns:
-            The name of the generated builder function.
-        """
+        """Return the builder for ``msg_type`` at dotted path ``prefix``, emitting it once."""
         key = f"{msg_type.__module__}.{msg_type.__qualname__}@{prefix}"
         existing = self._builders.get(key)
         if existing is not None:
@@ -520,14 +462,7 @@ def _emit_dict_to_msg(
 def dict_to_msg_source(msg_type: MessageClass, *, int64_as_string: bool = True) -> str:
     """Generate the source of a dict-to-message converter.
 
-    Args:
-        msg_type: A generated ROS message class.
-        int64_as_string: Accepted for symmetry. 64-bit integers are read from either a
-            JSON number or a JSON string regardless, because a path parameter is always a
-            string.
-
-    Returns:
-        Python source defining ``def from_dict(_d):`` plus one builder per message type.
+    Defines ``def from_dict(_d):`` plus one builder per message type.
     """
     return _emit_dict_to_msg(msg_type, int64_as_string=int64_as_string)[0]
 
@@ -537,17 +472,9 @@ def build_dict_to_msg(
 ) -> Callable[[Any], Any]:
     """Compile a converter turning a JSON object into a message instance.
 
-    Fields absent from the input keep the default from the ROS definition. Unknown fields
-    are rejected rather than ignored: silently dropping a misspelled field is how an
-    operator ends up believing a command was applied.
-
-    Args:
-        msg_type: A generated ROS message class.
-        int64_as_string: Accepted for symmetry with the write path.
-
-    Returns:
-        A single-argument callable raising :class:`ConversionError` on bad input. Its
-        source is available as ``__ros_source__``.
+    Absent fields keep the ROS default. Unknown fields are rejected, not ignored: silently
+    dropping a misspelled field is how an operator ends up believing a command was applied.
+    Raises :class:`ConversionError` on bad input; source available as ``__ros_source__``.
     """
     source, namespace = _emit_dict_to_msg(msg_type, int64_as_string=int64_as_string)
     exec(compile(source, f"<from_dict {type_name_of(msg_type)}>", "exec"), namespace)

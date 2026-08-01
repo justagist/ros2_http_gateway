@@ -31,12 +31,7 @@ examples:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Construct the argument parser.
-
-    Returns:
-        A parser covering every documented flag. Kept free of ROS imports so that
-        ``--help`` works on a plain Python installation.
-    """
+    """Construct the argument parser, free of ROS imports so ``--help`` needs no ROS."""
     parser = argparse.ArgumentParser(
         prog="ros2-http-gateway",
         description="Config-driven, authenticated HTTP + SSE gateway for ROS 2.",
@@ -73,14 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the command line interface.
-
-    Args:
-        argv: Argument vector excluding the program name. Defaults to ``sys.argv[1:]``.
-
-    Returns:
-        Process exit code: 0 on success, 1 on any handled failure, 2 on usage error.
-    """
+    """Run the command line interface, returning 0 on success, 1 on failure, 2 on misuse."""
     parser = build_parser()
     args = parser.parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format=_LOG_FORMAT, stream=sys.stderr)

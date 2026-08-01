@@ -1,16 +1,13 @@
 """Audit logging: one JSON line per request that reached a configured route.
 
-Recording is non-blocking. :meth:`AuditLogger.record` only appends to an in-memory queue; a
-background task drains it, batching whatever has accumulated into a single write so that a
-burst of requests costs one syscall rather than one per record.
+Recording is non-blocking: :meth:`AuditLogger.record` appends to an in-memory queue and a
+background task drains it, batching whatever accumulated into one write.
 
-There is no field for a token or a request body, which is the point: they cannot be logged
-by accident.
+There is no field for a token or a request body, which is the point: they cannot be logged by
+accident.
 
-The queue is bounded. If it ever fills, records are dropped rather than allowed to consume
-memory without limit, but a drop is never silent: it is counted, warned about through the
-normal logger, and the count is carried on the next record that does get written, so the
-audit trail itself shows where the gap is.
+The queue is bounded, and an overflow is never silent: drops are counted, warned about, and the
+count rides on the next record written, so the trail itself shows where the gap is.
 """
 
 from __future__ import annotations
@@ -41,12 +38,7 @@ class Decision:
 
 
 class AuditLogger:
-    """Writes audit records to stderr or a file, off the request path.
-
-    Args:
-        config: Where records should go.
-        queue_size: How many records may be waiting before further ones are dropped.
-    """
+    """Writes audit records to stderr or a file, off the request path."""
 
     __slots__ = ("_config", "_dropped", "_queue", "_stream", "_task")
 
@@ -97,22 +89,9 @@ class AuditLogger:
         reason: str | None = None,
         outcome: str = "ok",
     ) -> None:
-        """Queue one audit record. Never blocks, never raises.
-
-        Args:
-            method: HTTP method.
-            path: Request path as received.
-            decision: ``allow`` or ``deny``.
-            status: HTTP status returned.
-            latency_ms: Wall-clock time spent handling the request.
-            user: Authenticated user, or None if authentication failed.
-            roles: The user's roles, if known.
-            reason: Why a request was denied, or None when allowed.
-            outcome: ``ok`` or the ``error_code`` the client was given.
-        """
+        """Queue one audit record. Never blocks, never raises."""
         entry: dict[str, Any] = {
-            # timezone.utc rather than datetime.UTC: the latter arrived in 3.11 and Humble
-            # ships 3.10.
+            # timezone.utc, not datetime.UTC: the latter is 3.11+ and Humble ships 3.10.
             "ts": datetime.now(timezone.utc)
             .isoformat(timespec="microseconds")
             .replace("+00:00", "Z"),
@@ -126,9 +105,8 @@ class AuditLogger:
             "outcome": outcome,
             "latency_ms": round(latency_ms, 3),
         }
-        # The count is cleared only once a record carrying it is safely queued. Clearing it
-        # at the point of attaching would lose the tally whenever that very record is the one
-        # that gets dropped, which is exactly when the queue is full.
+        # Cleared only once a record carrying it is queued: clearing on attach would lose the
+        # tally whenever that record is itself the one dropped.
         if self._dropped:
             entry["dropped"] = self._dropped
         try:

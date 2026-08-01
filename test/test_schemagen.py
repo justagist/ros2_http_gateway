@@ -1,9 +1,8 @@
 """JSON Schema tests.
 
-The load-bearing test here is the agreement test: whatever the generated converter emits
-for a populated message must validate against the generated read schema, and must be
-accepted by the write schema. A schema that merely looks plausible is worse than none,
-because it is what the OpenAPI document promises to clients.
+The load-bearing one is the agreement test: whatever the converter emits for a populated
+message must validate against the read schema and be accepted by the write schema. A schema
+that merely looks plausible is worse than none, being what OpenAPI promises to clients.
 """
 
 from __future__ import annotations
@@ -129,10 +128,9 @@ def test_doubles_are_nullable_in_both_directions() -> None:
 
 
 def test_no_scalar_is_widened_to_accept_a_string_except_wide_ints() -> None:
-    """The divergence this pins down: the schema must not promise string acceptance.
+    """The write schema must not promise string acceptance the converter does not honour.
 
-    Every scalar type in the write schema has to be something the converter actually takes,
-    or an OpenAPI-validating client will send what the schema allows and get a 400.
+    Otherwise an OpenAPI-validating client sends what the schema allows and gets a 400.
     """
     schema = json_schema_for(get_message("test_msgs/msg/BasicTypes"), direction="write")
     for name, field in schema["properties"].items():

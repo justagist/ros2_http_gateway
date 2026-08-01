@@ -25,8 +25,7 @@ from rosidl_parser.definition import (
 )
 from rosidl_runtime_py.utilities import get_message
 
-# The upstream package built to cover every field kind, plus the everyday types a
-# gateway actually carries.
+# The upstream package covering every field kind, plus the everyday types a gateway carries.
 EDGE_CASE_TYPES = [
     "test_msgs/msg/BasicTypes",
     "test_msgs/msg/Arrays",
@@ -60,8 +59,7 @@ EVERYDAY_TYPES = [
 
 ALL_TYPES = EDGE_CASE_TYPES + EVERYDAY_TYPES
 
-# Above 2^53, so a JSON number would lose it. Present in every int64 field the populator
-# touches, which is what makes the int64_as_string tests meaningful.
+# Above 2^53, so a JSON number would lose it, which is what makes int64_as_string testable.
 BIG_INT64 = 2**53 + 1
 
 _SEQUENCE_LENGTH = 3
@@ -70,15 +68,8 @@ _SEQUENCE_LENGTH = 3
 def populate(msg_type: type, counter: itertools.count[int] | None = None) -> Any:
     """Fill every field of a message with distinctive, in-range values.
 
-    Deliberately avoids NaN and infinities: they have no JSON spelling other than
-    ``null``, so they cannot round-trip and are tested separately.
-
-    Args:
-        msg_type: A generated ROS message class.
-        counter: Shared counter, so that no two fields in a tree get the same value.
-
-    Returns:
-        A populated instance of ``msg_type``.
+    Avoids NaN and the infinities, which have no JSON spelling but ``null`` and so are tested
+    separately. ``counter`` is shared so no two fields in a tree get the same value.
     """
     counter = itertools.count(1) if counter is None else counter
     msg = msg_type()
@@ -90,25 +81,14 @@ def populate(msg_type: type, counter: itertools.count[int] | None = None) -> Any
 
 
 def assert_messages_equal(left: Any, right: Any, where: str = "") -> None:
-    """Assert two messages are field-for-field equal.
+    """Assert two messages are field-for-field equal, naming the first field that differs.
 
-    Replaces comparing ``serialize_message`` output, which is unsound: CDR inserts alignment
-    padding between fields of differing widths, and rosidl does not initialise it. Two
-    independently constructed default ``test_msgs/BasicTypes`` messages were measured
-    differing at bytes 26-27 roughly once in two hundred attempts, purely from whatever the
-    heap happened to contain. That produced a rare, baffling failure in a full suite run.
+    Comparing ``serialize_message`` output instead is unsound: CDR inserts alignment padding that
+    rosidl does not initialise, and two default ``test_msgs/BasicTypes`` messages were measured
+    differing at bytes 26-27 about once in two hundred attempts.
 
-    Walking the declared fields is also stronger than comparing the JSON encodings, because it
-    reads the messages themselves: a converter that lost precision in both directions would
-    still be caught here, where two equal JSON documents would hide it.
-
-    Args:
-        left: A message instance.
-        right: Another instance of the same type.
-        where: Dotted path used in the assertion message.
-
-    Raises:
-        AssertionError: On the first field that differs, naming its path.
+    Walking the fields is also stronger than comparing JSON encodings, which would hide a
+    converter losing precision in both directions.
     """
     for name, slot in zip(
         type(left).get_fields_and_field_types().keys(), type(left).SLOT_TYPES, strict=True
@@ -144,14 +124,7 @@ def _as_list(value: Any) -> list[Any]:
 def declared_field_tree(msg_type: type) -> dict[str, Any]:
     """Return the declared field names of a type tree, nested by field.
 
-    Used to check converter coverage independently of any byte comparison: a field that
-    both converters silently skipped would otherwise be invisible.
-
-    Args:
-        msg_type: A generated ROS message class.
-
-    Returns:
-        A nested mapping of field name to either None or the subtree of a message field.
+    Checks converter coverage: a field both converters silently skipped is otherwise invisible.
     """
     tree: dict[str, Any] = {}
     for name, slot in zip(
