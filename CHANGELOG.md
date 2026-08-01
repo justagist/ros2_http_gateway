@@ -100,6 +100,9 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- CI constrains numpy in the ROS venv to the major version the distro ships. Installing
+  numpy 2 alongside Humble's numpy-1-built rosidl extensions is the documented incompatible
+  direction and showed up as a segfault plus a scatter of errors.
 - Round-trip tests no longer compare serialised CDR bytes. CDR pads between fields of
   differing widths and rosidl leaves that padding uninitialised, so two independently built
   messages could differ in bytes no field maps to; measured about once in two hundred

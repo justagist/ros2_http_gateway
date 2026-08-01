@@ -119,14 +119,21 @@ def test_without_a_threshold_nothing_is_ever_stale() -> None:
     assert cache.is_stale(sample, sample.monotonic + 10_000) is False
 
 
-def test_staleness_is_judged_at_the_threshold() -> None:
+def test_staleness_is_judged_against_the_threshold() -> None:
+    """Either side of the threshold, deliberately not exactly on it.
+
+    ``(x + 0.1) - x > 0.1`` is representation-dependent: it held on one machine and not on
+    another, which is how an earlier version of this test failed on one CI distro only.
+    Sub-microsecond behaviour at the boundary is not a property worth pinning.
+    """
     cache = make_cache(stale_after_ms=100)
     cache.offer(raw_string("x"))
     sample = cache.latest
     assert sample is not None
     assert cache.is_stale(sample, sample.monotonic + 0.05) is False
-    assert cache.is_stale(sample, sample.monotonic + 0.10) is False, "exactly at the limit"
-    assert cache.is_stale(sample, sample.monotonic + 0.11) is True
+    assert cache.is_stale(sample, sample.monotonic + 0.099) is False
+    assert cache.is_stale(sample, sample.monotonic + 0.101) is True
+    assert cache.is_stale(sample, sample.monotonic + 5.0) is True
 
 
 def test_staleness_ignores_the_wall_clock() -> None:

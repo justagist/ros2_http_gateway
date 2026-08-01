@@ -137,8 +137,20 @@ jobs:
           # and so silently ignores the whole [project] table -- including the dev extra,
           # producing "does not provide the extra 'dev'" and no test dependencies at all.
           "$VENV/bin/python" -m pip install --quiet --upgrade pip
-          "$VENV/bin/python" -m pip install --quiet --ignore-installed -e '.[dev]'
+
+          # numpy has to stay on the same major version ROS was built against. Installing
+          # numpy 2 on Humble, whose rosidl extension modules are compiled against 1.x,
+          # corrupts memory and then segfaults somewhere unrelated -- it surfaced as a crash
+          # inside ast.parse while pytest was formatting an unrelated failure. Derived from
+          # whatever the distro ships rather than hardcoded per distro.
+          major=$("$VENV/bin/python" -c 'import numpy; print(numpy.__version__.split(".")[0])')
+          echo "numpy<$((major + 1))" > /tmp/ros-constraints.txt
+          echo "constraining numpy: $(cat /tmp/ros-constraints.txt)"
+
+          "$VENV/bin/python" -m pip install --quiet --ignore-installed \
+            -c /tmp/ros-constraints.txt -e '.[dev]'
           "$VENV/bin/python" -m pip --version
+          "$VENV/bin/python" -c 'import numpy; print("numpy", numpy.__version__)'
       - name: colcon build
         shell: bash
         run: |
