@@ -121,22 +121,25 @@ jobs:
       - name: install into a virtualenv
         shell: bash
         run: |
-          # Never install into the container's interpreter. It is Debian-managed, so pip
-          # either refuses outright (PEP 668 on Jazzy and newer) or dies trying to uninstall
-          # a distro package that ships no RECORD file, which is what `pytest>=7.4` wanting a
-          # newer pluggy triggers.
+          # Never install into the container's interpreter: it is Debian-managed, so pip
+          # either refuses outright (PEP 668) or dies trying to uninstall a distro package
+          # that ships no RECORD file, which is what `pytest>=7.4` wanting a newer pluggy
+          # triggers.
           #
-          # No --system-site-packages either, on purpose: that would put the distro's pytest
-          # and pluggy back in pip's sight and reintroduce exactly that failure. rclpy, the
-          # interface packages and rosidl_runtime_py stay importable because setup.bash
-          # exports PYTHONPATH, which a venv interpreter honours; numpy is a declared
-          # dependency and lands in the venv.
-          python3 -m venv "$VENV"
+          # --system-site-packages, because ROS needs more of the distro's Python than
+          # setup.bash puts on PYTHONPATH: on Rolling, loading an interface type reaches
+          # empy, which lives in /usr/lib/python3/dist-packages. A sealed venv made every
+          # ROS test skip instead of run.
+          #
+          # --ignore-installed is what makes that safe. pip then never tries to uninstall
+          # the distro's pytest or pluggy; it just installs our versions into the venv,
+          # which precedes dist-packages on sys.path and therefore wins.
+          python3 -m venv --system-site-packages "$VENV"
           # Humble ships pip 22, which installs an editable package via `setup.py develop`
           # and so silently ignores the whole [project] table -- including the dev extra,
           # producing "does not provide the extra 'dev'" and no test dependencies at all.
           "$VENV/bin/python" -m pip install --quiet --upgrade pip
-          "$VENV/bin/python" -m pip install --quiet -e '.[dev]'
+          "$VENV/bin/python" -m pip install --quiet --ignore-installed -e '.[dev]'
           "$VENV/bin/python" -m pip --version
       - name: colcon build
         shell: bash
@@ -150,6 +153,11 @@ jobs:
           ros2 run ros2_http_gateway gateway --help
       - name: full test suite
         shell: bash
+        env:
+          # Turns "rclpy would not import, so everything skipped" from a green run into a
+          # collection error. Without it a broken environment is indistinguishable from a
+          # deliberately ROS-free one, and this job would pass having tested nothing.
+          GATEWAY_REQUIRE_ROS: "1"
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
           # Includes the golden-file test, which is the converter drift check.

@@ -39,6 +39,10 @@ All notable changes to this project are documented here. Format follows
   Debian-managed interpreter, and type-checks on one interpreter rather than the whole
   version matrix. Both were breaking on the dependency toolchain rather than on this
   package.
+- The test suite now fails, rather than skipping, when `GATEWAY_REQUIRE_ROS=1` and the ROS
+  stack will not import. A broken environment previously looked identical to a deliberately
+  ROS-free one, so a distro whose interface types could not load reported a green run having
+  executed 96 tests instead of 485.
 - Numeric sequences take a zero-copy numpy view of the `array.array` buffer instead of
   building a list, once they are long enough for that to pay. Measured crossover is 64
   elements for every dtype; at 8192 the view is 1.6x faster for doubles and 3.3x for int32.
