@@ -8,6 +8,20 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- Service endpoints are served. A call returns the response in the documented envelope; no
+  server gives `SERVICE_UNAVAILABLE` and a slow one gives `TIMEOUT`, both as HTTP 200 because
+  the request itself was fine. A timed-out request is withdrawn, so a late reply cannot be
+  mistaken for the answer to a later call.
+- `request_map` fills request fields from path parameters, including dotted targets. The text
+  conversion for each target is chosen at startup from the field's declared type, so an
+  impossible mapping fails before the port opens rather than as a confusing 400.
+- State preconditions. A refusal is HTTP 200 with `PRECONDITION_FAILED` and is audited as a
+  denial with its reason. Refused rather than waved through: an unlisted parameter value, a
+  state endpoint that has received nothing yet, and a sample older than its own
+  `stale_after_ms`. Measured p99 for evaluation is 2.1us against the 1ms budget.
+- Auth and the role check run before policy, so a caller who may not use an endpoint learns
+  nothing about the robot's state from the refusal.
+
 - The gateway serves. `ros2-http-gateway config.yaml` brings up a ROS node and an HTTP
   listener: topic `GET` returns the latest cached sample, topic `POST` publishes, and
   `GET <base>/health` answers unauthenticated.

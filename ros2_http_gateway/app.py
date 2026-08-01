@@ -32,8 +32,10 @@ from .auth import (
     bearer_token,
 )
 from .codegen import ConversionError
+from .params import apply_bindings
+from .policy import PolicyEngine, build_policy
 from .resolve import ResolvedConfig, ResolvedEndpoint
-from .runtime import RosRuntime
+from .runtime import RosRuntime, ServiceTimeoutError, ServiceUnavailableError
 
 _LOG = logging.getLogger(__name__)
 
@@ -42,11 +44,9 @@ __all__ = ["build_app"]
 _JSON: Final = "application/json"
 _ORJSON_OPTS: Final = orjson.OPT_SERIALIZE_NUMPY
 
-# Phase 2 serves topics. Service and action endpoints are configured, validated and routed,
-# but answering them lands in the next phases; a 501 saying so beats a 404 that looks like a
-# config mistake.
+# Action endpoints are configured, validated and routed, but answering them lands in the next
+# phase; a 501 saying so beats a 404 that looks like a config mistake.
 _NOT_IMPLEMENTED: Final = {
-    "service": "service endpoints are answered from phase 3",
     "action": "action endpoints are answered from phase 4",
 }
 
@@ -79,6 +79,15 @@ def _error(status: int, error_code: str, message: str, **extra: Any) -> Response
     )
 
 
+def _envelope(status: int, error_code: str, message: str) -> Response:
+    """A service-shaped failure: still HTTP 200, because the request itself was fine."""
+    return _ErrorResponse(
+        status,
+        error_code,
+        {"success": False, "message": message, "error_code": error_code, "response": None},
+    )
+
+
 def build_app(
     resolved: ResolvedConfig,
     runtime: RosRuntime,
@@ -100,9 +109,13 @@ def build_app(
     Returns:
         The application, with every configured route registered.
     """
+    policy = build_policy(
+        {path: e.config.preconditions for path, e in resolved.endpoints.items()},
+        runtime.caches,
+    )
     base = resolved.config.http.base_path
     routes = [Route(f"{base}/health", _health(resolved, runtime), methods=["GET"])]
-    routes.extend(_endpoint_routes(resolved, runtime, audit, authenticator, base))
+    routes.extend(_endpoint_routes(resolved, runtime, audit, authenticator, policy, base))
     return Starlette(routes=routes, lifespan=lifespan)
 
 
@@ -111,6 +124,7 @@ def _endpoint_routes(
     runtime: RosRuntime,
     audit: AuditLogger,
     authenticator: Authenticator,
+    policy: PolicyEngine,
     base: str,
 ) -> Iterator[Route]:
     """Yield one route per configured endpoint, most specific path first.
@@ -125,7 +139,7 @@ def _endpoint_routes(
     )
     for path, endpoint in ordered:
         handler = _endpoint_handler(endpoint, runtime)
-        guarded = _guard(handler, endpoint, audit, authenticator)
+        guarded = _guard(handler, endpoint, audit, authenticator, policy)
         yield Route(f"{base}{path}", guarded, methods=[endpoint.config.method])
 
 
@@ -149,8 +163,14 @@ def _guard(
     endpoint: ResolvedEndpoint,
     audit: AuditLogger,
     authenticator: Authenticator,
+    policy: PolicyEngine,
 ) -> Handler:
-    """Wrap a handler with authentication, the role check, timing and audit.
+    """Wrap a handler with authentication, the role check, policy, timing and audit.
+
+    Preconditions are evaluated here rather than inside the handler so that every refusal --
+    unauthenticated, wrong role, or forbidden by the robot's state -- is recorded the same
+    way: ``decision: deny`` with the reason. A precondition refusal is still a 200, because
+    the request was well formed and authorised; it simply must not proceed.
 
     One audit record per request that reaches a configured route: allowed, denied, or failed
     inside the handler. A request that matches no route is Starlette's 404 and is not audited,
@@ -183,6 +203,13 @@ def _guard(
                         "FORBIDDEN",
                         f"this endpoint requires one of: {', '.join(sorted(required))}",
                     ),
+                )
+            elif (
+                refusal := policy.evaluate(endpoint.config.path, request.path_params)
+            ) is not None:
+                denial, response = (
+                    refusal,
+                    _envelope(200, "PRECONDITION_FAILED", refusal),
                 )
             else:
                 try:
@@ -222,7 +249,70 @@ def _endpoint_handler(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handle
         return _topic_read(endpoint, runtime)
     if endpoint.config.is_topic_write:
         return _topic_write(endpoint, runtime)
+    if endpoint.config.kind == "service":
+        return _service_call(endpoint, runtime)
     return _not_implemented(endpoint)
+
+
+def _service_call(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
+    """POST a body, call the service, return its response.
+
+    ``success`` describes the call, not the robot's opinion of it: a service that answers
+    ``success: false`` in its own response still produces a 200 with ``"success": true`` here
+    and its own fields under ``response``. Conflating the two would make it impossible for a
+    client to tell "the gateway could not ask" from "the robot said no".
+    """
+    path = endpoint.config.path
+    from_dict = endpoint.from_dict
+    to_dict = endpoint.to_dict
+    bindings = endpoint.bindings
+    timeout_s = endpoint.config.timeout_ms / 1000.0
+    assert from_dict is not None and to_dict is not None
+
+    async def call(request: Request) -> Response:
+        raw = await request.body()
+        try:
+            payload = orjson.loads(raw) if raw else {}
+        except orjson.JSONDecodeError as exc:
+            return _error(400, "BAD_REQUEST", f"body is not valid JSON: {exc}")
+        if not isinstance(payload, dict):
+            return _error(400, "BAD_REQUEST", "body must be a JSON object")
+
+        try:
+            payload = apply_bindings(bindings, payload, request.path_params)
+        except ValueError as exc:
+            return _error(400, "BAD_REQUEST", str(exc))
+
+        try:
+            message = from_dict(payload)
+        except ConversionError as exc:
+            return _error(400, "BAD_REQUEST", str(exc), field=exc.field)
+
+        try:
+            response = await runtime.call_service(path, message, timeout_s)
+        except ServiceUnavailableError:
+            return _envelope(
+                200,
+                "SERVICE_UNAVAILABLE",
+                f"no server is offering {endpoint.ros_name}",
+            )
+        except ServiceTimeoutError:
+            return _envelope(
+                200,
+                "TIMEOUT",
+                f"{endpoint.ros_name} did not answer within {endpoint.config.timeout_ms}ms",
+            )
+
+        return _json(
+            {
+                "success": True,
+                "message": "",
+                "error_code": None,
+                "response": to_dict(response),
+            }
+        )
+
+    return call
 
 
 def _topic_read(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:

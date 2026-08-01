@@ -17,6 +17,7 @@ Two findings from measuring the runtime shaped this file:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import queue
 import threading
@@ -29,7 +30,22 @@ from .resolve import ResolvedConfig
 
 _LOG = logging.getLogger(__name__)
 
-__all__ = ["RosRuntime", "make_executor"]
+__all__ = [
+    "RosRuntime",
+    "ServiceTimeoutError",
+    "ServiceUnavailableError",
+    "make_executor",
+    "qos_profile",
+]
+
+
+class ServiceUnavailableError(RuntimeError):
+    """No server is offering the service this endpoint points at."""
+
+
+class ServiceTimeoutError(RuntimeError):
+    """The service did not answer within the endpoint's timeout."""
+
 
 _NODE_NAME: Final = "ros2_http_gateway"
 _QUEUE_TIMEOUT_S: Final = 0.1
@@ -48,6 +64,16 @@ class _Outgoing:
 
     publisher: Any
     message: Any
+
+
+def _settle(target: asyncio.Future[Any], source: Any) -> None:
+    """Move an rclpy future's outcome onto an asyncio future, on the loop thread."""
+    if target.done():  # the call already timed out and gave up on this response
+        return
+    try:
+        target.set_result(source.result())
+    except Exception as exc:
+        target.set_exception(exc)
 
 
 def qos_profile(preset: QosPreset) -> Any:
@@ -115,6 +141,7 @@ class RosRuntime:
     """
 
     __slots__ = (
+        "_clients",
         "_context",
         "_executor",
         "_executor_name",
@@ -134,6 +161,7 @@ class RosRuntime:
         self.resolved = resolved
         self.caches: dict[str, TopicCache] = {}
         self._publishers: dict[str, Any] = {}
+        self._clients: dict[str, Any] = {}
         self._subscribed: dict[str, str] = {}
         self._context: Any = None
         self._node: Any = None
@@ -206,6 +234,15 @@ class RosRuntime:
                     endpoint.type_name,
                     endpoint.config.qos,
                 )
+            elif endpoint.config.kind == "service":
+                self._clients[path] = self._node.create_client(
+                    endpoint.interface,
+                    endpoint.ros_name,
+                    callback_group=MutuallyExclusiveCallbackGroup(),
+                )
+                _LOG.info(
+                    "service client %s <- %s [%s]", endpoint.ros_name, path, endpoint.type_name
+                )
 
         try:
             self._executor, self._executor_name = make_executor(
@@ -253,6 +290,51 @@ class RosRuntime:
         except queue.Full:
             return False
         return True
+
+    def service_is_ready(self, path: str) -> bool:
+        """Whether a server is currently offering this endpoint's service."""
+        client = self._clients[path]
+        ready: bool = client.service_is_ready()
+        return ready
+
+    async def call_service(self, path: str, request: Any, timeout_s: float) -> Any:
+        """Call a service from the event loop without blocking it.
+
+        rclpy futures are not asyncio futures, so the response is handed across by a done
+        callback that schedules the result onto the loop. Verified to work under both
+        executors, unlike guard conditions.
+
+        Args:
+            path: The endpoint key, which selects the client.
+            request: The request message.
+            timeout_s: How long to wait before giving up.
+
+        Returns:
+            The response message.
+
+        Raises:
+            ServiceUnavailableError: If no server is offering the service.
+            ServiceTimeoutError: If it does not answer in time. The pending request is withdrawn,
+                so a late reply cannot be mistaken for the answer to a later call.
+        """
+        client = self._clients[path]
+        if not client.service_is_ready():
+            raise ServiceUnavailableError(path)
+
+        loop = asyncio.get_running_loop()
+        settled: asyncio.Future[Any] = loop.create_future()
+        ros_future = client.call_async(request)
+
+        def on_done(future: Any) -> None:
+            # Runs on a ROS callback thread, so nothing here may touch the loop directly.
+            loop.call_soon_threadsafe(_settle, settled, future)
+
+        ros_future.add_done_callback(on_done)
+        try:
+            return await asyncio.wait_for(settled, timeout_s)
+        except asyncio.TimeoutError:
+            client.remove_pending_request(ros_future)
+            raise ServiceTimeoutError(path) from None
 
     def stop(self) -> None:
         """Stop spinning, drain the publish queue and destroy the node."""

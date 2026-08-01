@@ -125,8 +125,39 @@ may draw on path parameters.
 
 `success` reflects the call, not the robot's opinion: a service that answers
 `{"success": false}` in its own response still produces HTTP 200 with `"success": true` at
-this layer and its own fields under `response`. On `TIMEOUT` or `SERVICE_UNAVAILABLE`,
-`response` is `null`.
+this layer and its own fields under `response`. Conflating the two would leave a client unable
+to distinguish "the gateway could not ask" from "the robot said no". On `TIMEOUT` or
+`SERVICE_UNAVAILABLE`, `response` is `null`.
+
+A timed-out request is withdrawn from the client, so a late reply can never be mistaken for
+the answer to a subsequent call.
+
+### Preconditions
+
+A configured precondition is evaluated before the call is forwarded. A refusal is HTTP 200
+with `PRECONDITION_FAILED`, and is audited as `decision: deny` with the reason:
+
+```json
+{
+  "success": false,
+  "message": "data is 'IDLE', which does not permit this call (allowed: PAUSED, RUNNING)",
+  "error_code": "PRECONDITION_FAILED",
+  "response": null
+}
+```
+
+Three situations refuse rather than pass, because a gate that fails open is not a gate:
+
+- the path parameter's value is not listed in `allow`;
+- the state endpoint has received nothing yet, so the state is unknown;
+- its newest sample is older than its own `stale_after_ms`. Deciding it is safe to start
+  because the robot was idle a minute ago is the mistake preconditions exist to prevent.
+
+The last one is worth planning for: a precondition on a topic with a staleness threshold makes
+the gate depend on that topic still being published.
+
+Authentication and the role check run *before* policy, so a caller who may not use an endpoint
+learns nothing about the robot's state from the refusal.
 
 ## Actions
 

@@ -350,21 +350,31 @@ async def test_a_query_string_never_reaches_the_audit_record(gateway: Harness) -
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("path", "phase"), [("/call", "phase 3"), ("/pick", "phase 4")])
-async def test_service_and_action_endpoints_say_they_are_not_served_yet(
-    gateway: Harness, path: str, phase: str
-) -> None:
+async def test_action_endpoints_say_they_are_not_served_yet(gateway: Harness) -> None:
     """A 501 naming the phase beats a 404 that reads like a config mistake."""
-    response = await gateway.post(path, {})
+    response = await gateway.post("/pick", {})
     assert response.status_code == 501
     payload = response.json()
     assert payload["error_code"] == "NOT_IMPLEMENTED"
-    assert phase in payload["message"]
+    assert "phase 4" in payload["message"]
+
+
+async def test_a_service_endpoint_is_served_and_reports_a_missing_server(
+    gateway: Harness,
+) -> None:
+    """Nothing offers /gateway_test_service, so this exercises the unavailable path.
+
+    Service behaviour proper lives in test_services.py; this only pins that a configured
+    service endpoint is wired up rather than answering 501.
+    """
+    response = await gateway.post("/call", {})
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "SERVICE_UNAVAILABLE"
 
 
 async def test_a_not_implemented_endpoint_still_enforces_auth(gateway: Harness) -> None:
-    assert (await gateway.post("/call", {}, token=None)).status_code == 401
-    assert (await gateway.post("/call", {}, token=VIEWER_TOKEN)).status_code == 403
+    assert (await gateway.post("/pick", {}, token=None)).status_code == 401
+    assert (await gateway.post("/pick", {}, token=VIEWER_TOKEN)).status_code == 403
 
 
 # --------------------------------------------------------------------------------------

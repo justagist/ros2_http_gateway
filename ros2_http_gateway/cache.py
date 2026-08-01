@@ -68,6 +68,8 @@ class TopicCache:
     """
 
     __slots__ = (
+        "_decoded",
+        "_decoded_seq",
         "_encoded",
         "_encoded_seq",
         "_sample",
@@ -90,6 +92,8 @@ class TopicCache:
         self._seq = 0
         self._encoded: bytes = b""
         self._encoded_seq = -1
+        self._decoded: dict[str, Any] = {}
+        self._decoded_seq = -1
 
     # ---------------------------------------------------------------- ROS thread side
 
@@ -127,6 +131,31 @@ class TopicCache:
         sample = self._sample
         return sample.seq if sample is not None else 0
 
+    def decoded(self, sample: Sample) -> dict[str, Any]:
+        """Return ``sample`` as a converted dict, deserialising at most once per sample.
+
+        Memoised separately from the encoded bytes so that a policy check reading one field
+        and a GET returning the whole message share the single deserialisation, in either
+        order.
+
+        Must be called from the event loop thread; see the module docstring.
+
+        Args:
+            sample: The sample to decode, as returned by :attr:`latest`.
+
+        Returns:
+            The converted message. Not plain JSON: numeric arrays are still numpy.
+        """
+        if self._decoded_seq == sample.seq:
+            return self._decoded
+
+        from rclpy.serialization import deserialize_message
+
+        value = self._to_dict(deserialize_message(sample.raw, self.message_type))
+        self._decoded = value
+        self._decoded_seq = sample.seq
+        return value
+
     def encoded_data(self, sample: Sample) -> bytes:
         """Return the JSON encoding of ``sample``, deserialising at most once per sample.
 
@@ -141,10 +170,7 @@ class TopicCache:
         if self._encoded_seq == sample.seq:
             return self._encoded
 
-        from rclpy.serialization import deserialize_message
-
-        message = deserialize_message(sample.raw, self.message_type)
-        encoded = orjson.dumps(self._to_dict(message), option=_ORJSON_OPTS)
+        encoded = orjson.dumps(self.decoded(sample), option=_ORJSON_OPTS)
         self._encoded = encoded
         self._encoded_seq = sample.seq
         return encoded

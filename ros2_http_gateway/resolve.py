@@ -24,6 +24,7 @@ from rosidl_parser.definition import AbstractGenericString, BasicType
 
 from .codegen import MessageClass, build_dict_to_msg, build_msg_to_dict, iter_fields
 from .config import ConfigError, EndpointConfig, GatewayConfig, Kind
+from .params import ParamBinding, UnsupportedTargetError, coercer_for, template_parameters
 
 _LOG = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class ResolvedEndpoint:
     from_dict: Callable[[Any], Any] | None
     result_to_dict: Callable[[Any], dict[str, Any]] | None = None
     feedback_to_dict: Callable[[Any], dict[str, Any]] | None = None
+    bindings: tuple[ParamBinding, ...] = ()
 
     @property
     def message_type(self) -> MessageClass:
@@ -304,6 +306,7 @@ def _load(
                 ros_name=ros_name,
                 to_dict=build_msg_to_dict(interface.Response, int64_as_string=wide),
                 from_dict=build_dict_to_msg(interface.Request, int64_as_string=wide),
+                bindings=_bindings(endpoint, interface.Request, where, problems),
             )
         return ResolvedEndpoint(
             config=endpoint,
@@ -318,6 +321,35 @@ def _load(
     except (TypeError, ValueError) as exc:
         problems.append(f"{where}: cannot build a JSON converter for {type_name}: {exc}")
         return None
+
+
+def _bindings(
+    endpoint: EndpointConfig,
+    request_type: MessageClass,
+    where: str,
+    problems: list[str],
+) -> tuple[ParamBinding, ...]:
+    """Resolve each request_map entry to the field it fills and how to fill it.
+
+    Every failure here is a config mistake worth catching before the port opens: a target
+    field that does not exist, or one that text cannot sensibly fill.
+    """
+    built: list[ParamBinding] = []
+    for target, template in endpoint.request_map.items():
+        parts = tuple(target.split("."))
+        spot = f"{where}.request_map.{target}"
+        slot = _slot_at(request_type, parts, spot, problems)
+        if slot is None:
+            continue
+        try:
+            coerce = coercer_for(slot, target)
+        except UnsupportedTargetError as exc:
+            problems.append(f"{spot}: {exc}")
+            continue
+        # The config engine has already checked the referenced parameters exist.
+        assert all(name in endpoint.path_params for name in template_parameters(template))
+        built.append(ParamBinding(target=parts, template=template, coerce=coerce, label=target))
+    return tuple(built)
 
 
 def _import_interface(

@@ -77,7 +77,7 @@ endpoints:
 | `roles` | all | from `defaults` | At least one role, here or in `defaults`, or the endpoint is unreachable |
 | `stale_after_ms` | topic `GET` | never stale | Past this age a read returns `"stale": true` |
 | `timeout_ms` | service, action | `5000` | |
-| `request_map` | service | | Request field to template, drawing on path parameters |
+| `request_map` | service | | Request field (dotted) to template, drawing on path parameters |
 | `preconditions` | anything that changes state | | See below |
 
 Setting `stale_after_ms` on anything but a topic `GET`, or `timeout_ms` on a topic, is an
@@ -135,6 +135,26 @@ Merged into every endpoint that does not set the key itself. Only `roles`,
 `stale_after_ms` and `timeout_ms` are accepted, and deliberately not `method`: a default
 that silently turned topics into publishers would be a hazard, not a convenience.
 
+### `request_map`
+
+Path parameters are text; request fields are typed. Each entry names the request field it
+fills, and the value is a template that path parameters are substituted into:
+
+```yaml
+  /math/{a}/plus/{b}:
+    service: /add_two_ints
+    request_map:
+      a: "{a}"          # int64 field, filled from text
+      b: "{b}"
+```
+
+The conversion for each target is chosen at startup from the field's declared type, so a
+target that does not exist, or that text cannot sensibly fill (a message or an array), is a
+startup error rather than a puzzling 400 later. Dotted targets reach nested fields
+(`goal.pose.position.x`). A `request_map` entry wins over the same field given in the body,
+because the URL is the more specific statement of intent. A value that will not convert is a
+400 naming the field.
+
 ## `preconditions`
 
 A precondition compares a field of another endpoint's latest cached sample against an
@@ -156,6 +176,7 @@ log with its reason.
           "*": [IDLE]                     # any other command, only while IDLE
 ```
 
+- A refusal is HTTP 200 with `PRECONDITION_FAILED`, audited as a denial with its reason.
 - `state_endpoint` must name a configured topic `GET` endpoint. Anything else has no
   cached sample to read.
 - `field` is checked against the real message definition at startup. A field that does not
