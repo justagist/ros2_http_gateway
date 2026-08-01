@@ -45,6 +45,11 @@ dependencies = [
   # Validates the config file against the shipped config.schema.json, so a malformed
   # deployment config fails at startup instead of at the first request.
   "jsonschema>=4.18",
+  # rclpy hands numeric arrays over as numpy arrays and every generated message module
+  # imports it, so it is already present in any ROS environment. Declared anyway because
+  # codegen.py imports it directly, and a pip install into a plain venv would not get it
+  # from the Debian python3-numpy package that a ROS install relies on.
+  "numpy>=1.22",
 ]
 
 # rclpy is deliberately NOT listed here. It is not distributable via PyPI; it comes from
@@ -113,13 +118,17 @@ known-local-folder = ["ros_fixtures"]
 "ros2_http_gateway/codegen.py" = ["E501"]
 
 [tool.mypy]
-python_version = "3.10"
+# Not our 3.10 floor, on purpose. numpy's bundled stubs use PEP 695 `type` statements,
+# which mypy refuses to parse under an older target, and neither follow_imports = "skip"
+# nor ignore_errors suppresses a syntax error inside a stub. The 3.10 floor is enforced
+# instead by ruff's target-version = "py310" for syntax and feature use, and by the py3.10
+# leg of CI actually importing and running the whole suite.
+python_version = "3.12"
 strict = true
 warn_unreachable = true
 # rclpy and the ROS interface packages ship no type information.
 [[tool.mypy.overrides]]
 module = [
-  "numpy",
   "rclpy.*",
   "rosidl_runtime_py.*",
   "rosidl_parser.*",

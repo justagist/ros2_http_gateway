@@ -44,6 +44,19 @@ pip install ros2-http-gateway
 environment. `--help` and `--version` work without ROS, everything else needs
 `source /opt/ros/$ROS_DISTRO/setup.bash`.
 
+On a Debian-managed Python (which is what a ROS container gives you), install into a
+virtualenv rather than fighting PEP 668. A plain venv is enough: `rclpy` and the interface
+packages stay importable through the `PYTHONPATH` that `setup.bash` exports.
+
+```bash
+python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install ros2-http-gateway
+```
+
+Upgrading pip inside the venv matters on Humble: pip 22 installs an editable package with
+`setup.py develop`, and the setuptools it pairs with ignores `pyproject.toml` metadata
+entirely, so dependencies and extras are silently skipped.
+
 ### In a colcon workspace
 
 ```bash

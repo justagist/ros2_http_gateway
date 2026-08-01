@@ -32,6 +32,13 @@ All notable changes to this project are documented here. Format follows
 
 ### Changed
 
+- `numpy` is now a declared runtime dependency. It always was one in practice: `codegen.py`
+  imports it and every generated message module does too, but a pip install into a plain
+  virtualenv would not inherit the Debian `python3-numpy` that a ROS install relies on.
+- CI installs into a virtualenv inside the ROS containers instead of the container's
+  Debian-managed interpreter, and type-checks on one interpreter rather than the whole
+  version matrix. Both were breaking on the dependency toolchain rather than on this
+  package.
 - Numeric sequences take a zero-copy numpy view of the `array.array` buffer instead of
   building a list, once they are long enough for that to pay. Measured crossover is 64
   elements for every dtype; at 8192 the view is 1.6x faster for doubles and 3.3x for int32.

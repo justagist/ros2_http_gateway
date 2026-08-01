@@ -11,10 +11,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Style and types once, not per interpreter. mypy parses stubs with the host
+  # interpreter's ast, and numpy's bundled stubs use PEP 695 `type` statements that a 3.10
+  # or 3.11 host cannot parse at all, so running mypy across the version matrix fails on
+  # the dependency rather than on this package. The 3.10 floor is still enforced: ruff's
+  # target-version = "py310" covers syntax and feature use, and the unit job below actually
+  # imports and runs everything on 3.10.
+  lint-type:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: ruff lint
+        run: ruff check .
+      - name: ruff format
+        run: ruff format --check .
+      - name: mypy
+        run: mypy --strict ros2_http_gateway
+
   # Everything that must work without ROS installed. Guards the "pip install on a plain
   # machine" half of the dual-install promise and keeps the rclpy seam honest.
-  lint-type-unit:
-    name: lint + mypy + unit (py${{ matrix.python }}, no ROS)
+  unit:
+    name: unit (py${{ matrix.python }}, no ROS)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -29,12 +54,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
-      - name: ruff lint
-        run: ruff check .
-      - name: ruff format
-        run: ruff format --check .
-      - name: mypy
-        run: mypy --strict ros2_http_gateway
       - name: unit tests (no ROS)
         run: pytest -m 'not ros' -q
       - name: cli works without ROS
@@ -83,22 +102,42 @@ jobs:
           - { distro: rolling, executor: events }
     env:
       GATEWAY_TEST_EXECUTOR: ${{ matrix.executor }}
+      # Deliberately outside the workspace: the colcon step symlinks the workspace into a
+      # scratch overlay, and a venv full of site-packages is both slow to crawl and none of
+      # colcon's business.
+      VENV: /tmp/gateway-venv
     steps:
       - uses: actions/checkout@v4
       - name: apt deps
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            python3-pip python3-venv \
+            python3-venv \
             ros-${{ matrix.distro }}-example-interfaces \
             ros-${{ matrix.distro }}-test-msgs \
             ros-${{ matrix.distro }}-geometry-msgs \
             ros-${{ matrix.distro }}-sensor-msgs \
             ros-${{ matrix.distro }}-std-srvs
-      - name: install package
+      - name: install into a virtualenv
+        shell: bash
         run: |
-          # System python is the ROS python; rclpy must stay importable, so install in place.
-          pip install --break-system-packages -e '.[dev]' || pip install -e '.[dev]'
+          # Never install into the container's interpreter. It is Debian-managed, so pip
+          # either refuses outright (PEP 668 on Jazzy and newer) or dies trying to uninstall
+          # a distro package that ships no RECORD file, which is what `pytest>=7.4` wanting a
+          # newer pluggy triggers.
+          #
+          # No --system-site-packages either, on purpose: that would put the distro's pytest
+          # and pluggy back in pip's sight and reintroduce exactly that failure. rclpy, the
+          # interface packages and rosidl_runtime_py stay importable because setup.bash
+          # exports PYTHONPATH, which a venv interpreter honours; numpy is a declared
+          # dependency and lands in the venv.
+          python3 -m venv "$VENV"
+          # Humble ships pip 22, which installs an editable package via `setup.py develop`
+          # and so silently ignores the whole [project] table -- including the dev extra,
+          # producing "does not provide the extra 'dev'" and no test dependencies at all.
+          "$VENV/bin/python" -m pip install --quiet --upgrade pip
+          "$VENV/bin/python" -m pip install --quiet -e '.[dev]'
+          "$VENV/bin/python" -m pip --version
       - name: colcon build
         shell: bash
         run: |
@@ -113,19 +152,11 @@ jobs:
         shell: bash
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
-          pytest -q
+          # Includes the golden-file test, which is the converter drift check.
+          "$VENV/bin/python" -m pytest -q
       - name: check example configs
         shell: bash
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
-          ros2-http-gateway --check examples/dev.yaml
-          ros2-http-gateway --check examples/locked_down.yaml
-      - name: golden converter files are up to date
-        shell: bash
-        run: |
-          source /opt/ros/${{ matrix.distro }}/setup.bash
-          python3 scripts/update_golden.py
-          git diff --exit-code -- test/golden || {
-            echo 'golden files differ from generated output; run scripts/update_golden.py'
-            exit 1
-          }
+          "$VENV/bin/ros2-http-gateway" --check examples/dev.yaml
+          "$VENV/bin/ros2-http-gateway" --check examples/locked_down.yaml
