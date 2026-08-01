@@ -114,5 +114,18 @@ jobs:
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
           pytest -q
-      # A `--check examples/*.yaml` step is added here in phase 1, once --check does
-      # something. Adding it now would only ever be red.
+      - name: check example configs
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          ros2-http-gateway --check examples/dev.yaml
+          ros2-http-gateway --check examples/locked_down.yaml
+      - name: golden converter files are up to date
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          python3 scripts/update_golden.py
+          git diff --exit-code -- test/golden || {
+            echo 'golden files differ from generated output; run scripts/update_golden.py'
+            exit 1
+          }

@@ -8,9 +8,10 @@ logging, server-sent events and an auto-generated OpenAPI 3.1 document.
 
 **Deny by default: nothing is exposed unless it appears in the config.**
 
-> Status: under construction. Phase 0 (packaging skeleton) is in place; the config
-> engine, runtime and HTTP surface land in the following phases. See
-> [CHANGELOG.md](CHANGELOG.md) for what actually works today.
+> Status: under construction. The config engine, interface type resolution, converter
+> code generation and `--check` all work today; the HTTP server itself lands next. See
+> [CHANGELOG.md](CHANGELOG.md) for what is real, and
+> [docs/configuration.md](docs/configuration.md) for the config reference.
 
 ## Why not rosbridge
 
@@ -58,6 +59,12 @@ ros2 run ros2_http_gateway gateway --help
 ros2-http-gateway --check examples/dev.yaml   # validate, exit 0/1, no server started
 ros2-http-gateway examples/dev.yaml           # serve on http://127.0.0.1:8080/api/v1
 ```
+
+`--check` resolves every interface type, compiles every converter and checks every
+precondition field against the real message definition, then prints one line per endpoint.
+It needs no running system when the config pins its types, which is what makes it usable
+as a CI gate. Full format documented in
+[docs/configuration.md](docs/configuration.md).
 
 ```bash
 curl -H 'Authorization: Bearer dev-token-change-me' \

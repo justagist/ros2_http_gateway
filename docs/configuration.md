@@ -1,0 +1,228 @@
+# Configuration reference
+
+One YAML file describes the entire HTTP surface. Nothing not named in it is reachable.
+
+Validate a file without starting anything:
+
+```bash
+ros2-http-gateway --check gateway.yaml          # exit 0 or 1, one line per endpoint
+ros2-http-gateway --check --discovery-timeout 15 gateway.yaml
+```
+
+`--check` reports every problem it finds at once, each one naming its exact location in
+the file. A machine-readable JSON Schema for the whole format ships inside the package at
+`ros2_http_gateway/config.schema.json`, so an editor can autocomplete and lint it.
+
+## Top level
+
+| Key | Required | Default | Purpose |
+|---|---|---|---|
+| `endpoints` | yes | | HTTP path to what it exposes |
+| `auth` | yes | | Bearer token identities and their roles |
+| `defaults` | no | | Values merged into every endpoint |
+| `sse` | no | no stream | Global server-sent-events stream |
+| `http` | no | see below | Listening socket and API prefix |
+| `ros` | no | `executor: auto` | ROS-side runtime options |
+| `actions` | no | `result_ttl_s: 300` | Goal registry behaviour |
+| `audit` | no | `sink: stderr` | Where audit records go |
+| `json` | no | `int64_as_string: true` | JSON encoding options |
+
+Unknown keys are always an error, never ignored. A typo in a security-relevant key must
+not fail open.
+
+## `endpoints`
+
+The key is the HTTP path, relative to `http.base_path`. Path parameters use
+`{braces}`. The kind is inferred from which of `topic`, `service` or `action` is
+present; exactly one is required.
+
+```yaml
+endpoints:
+  /mission/status:
+    topic: /mission/state              # GET the latest cached sample
+    type: example_interfaces/msg/String
+    roles: [viewer, operator]
+    stale_after_ms: 1000
+
+  /cmd_vel:
+    topic: /cmd_vel                    # POST publishes the request body
+    method: POST
+    roles: [operator]
+
+  /math/{a}/plus/{b}:
+    service: /add_two_ints
+    timeout_ms: 3000
+    request_map: { a: "{a}", b: "{b}" }
+
+  /pick:
+    action: /pick_place
+    roles: [operator]
+```
+
+| Key | Applies to | Default | Notes |
+|---|---|---|---|
+| `topic` / `service` / `action` | | | Exactly one. Absolute or root-relative ROS name; `~` is not accepted |
+| `type` | all | resolved from the graph | `<pkg>/msg\|srv\|action/<Name>`, and the middle segment must match the kind |
+| `method` | topic | `GET` | `POST` on a topic publishes. Services and actions are always `POST` |
+| `roles` | all | from `defaults` | At least one role, here or in `defaults`, or the endpoint is unreachable |
+| `stale_after_ms` | topic `GET` | never stale | Past this age a read returns `"stale": true` |
+| `timeout_ms` | service, action | `5000` | |
+| `request_map` | service | | Request field to template, drawing on path parameters |
+| `preconditions` | anything that changes state | | See below |
+
+Setting `stale_after_ms` on anything but a topic `GET`, or `timeout_ms` on a topic, is an
+error: it means the config does not say what its author thought. The same keys arriving
+from `defaults` are simply ignored where they do not apply, so one `defaults:` block can
+serve a config holding all three kinds.
+
+### Omitting `type`
+
+With no `type`, the gateway resolves it from the ROS graph at startup, waiting up to
+`--discovery-timeout` seconds (default 5). If the name is absent, or advertises more than
+one type, startup fails and names the endpoint and the candidates it saw.
+
+Pinning `type` explicitly makes `--check` hermetic: no graph, no running system, so it
+works as a CI gate on a pull request. Both shipped examples pin their types for exactly
+that reason.
+
+## `defaults`
+
+Merged into every endpoint that does not set the key itself. Only `roles`,
+`stale_after_ms` and `timeout_ms` are accepted, and deliberately not `method`: a default
+that silently turned topics into publishers would be a hazard, not a convenience.
+
+## `preconditions`
+
+A precondition compares a field of another endpoint's latest cached sample against an
+allow-list before the call is forwarded. A rejection returns HTTP 200 with
+`"success": false` and `"error_code": "PRECONDITION_FAILED"`, and is recorded in the audit
+log with its reason.
+
+```yaml
+  /mission/{command}:
+    service: /mission_control
+    preconditions:
+      - state_endpoint: /mission/status   # must be a configured topic GET endpoint
+        field: data                       # dotted paths allowed: status.state.id
+        key: "{command}"                  # optional; defaults to the sole path parameter
+        allow:
+          start: [IDLE]                   # start only from IDLE
+          abort: [RUNNING, PAUSED]
+          reset: ["*"]                    # reset from any state
+          "*": [IDLE]                     # any other command, only while IDLE
+```
+
+- `state_endpoint` must name a configured topic `GET` endpoint. Anything else has no
+  cached sample to read.
+- `field` is checked against the real message definition at startup. A field that does not
+  exist, a dotted path through a scalar, or a field that is not a string or integer (and so
+  cannot be compared with the strings in `allow`) all fail before the port opens.
+- `key` names the path parameter whose value keys `allow`. With exactly one path parameter
+  it is inferred; with several it is required; with none, the only usable key is `"*"`.
+- `"*"` works in both positions: as a key it matches any parameter value, and as the whole
+  state list it matches any state. A parameter value matching no key is denied.
+
+## `auth`
+
+```yaml
+auth:
+  tokens:
+    - token_sha256: "f01d24...06607"     # lowercase hex sha256 of the bearer token
+      user: hmi-station-1
+      roles: [operator]
+```
+
+Clients send `Authorization: Bearer <token>`. Comparison is against the hash, in constant
+time. A missing or unknown token is 401; a known token without the endpoint's role is 403.
+
+A plaintext `token:` is accepted and hashed on load, but it warns loudly and is **refused
+outright if the config file is world-readable**, which a git checkout always is. Generate
+the hash instead:
+
+```bash
+printf %s "$TOKEN" | sha256sum
+```
+
+The same token cannot be assigned to two users; that is a config error, not a merge of
+their roles.
+
+## `sse`
+
+```yaml
+sse:
+  path: /events
+  include: [/mission/status]      # endpoint keys; topic endpoints only
+  overflow: drop_oldest           # or disconnect
+  max_clients: 32
+```
+
+`include` is required and accepts topic `GET` endpoints only. Action feedback is streamed
+per goal from `/<action>/{goal_id}/stream`, not through this global stream.
+
+## `http`
+
+```yaml
+http:
+  bind: 127.0.0.1        # default; 0.0.0.0 must be explicit and logs a warning
+  port: 8080
+  base_path: /api/v1     # trailing slash accepted and stripped; "/" means no prefix
+```
+
+The gateway does not terminate TLS. Bind it to localhost and put a reverse proxy in front.
+
+## `ros`
+
+```yaml
+ros:
+  executor: auto         # auto | events | multithreaded
+```
+
+`auto` uses `rclpy.experimental.EventsExecutor` where it exists (Kilted and newer) and
+`MultiThreadedExecutor` otherwise, logging which one it chose. Asking for `events` on a
+distro without it is a startup error rather than a silent downgrade.
+
+## `audit`
+
+```yaml
+audit:
+  sink: stderr
+# or
+audit:
+  sink: file
+  path: /var/log/ros2_http_gateway/audit.jsonl
+```
+
+One JSON line per authenticated request: timestamp, user, roles, method, path, decision
+and its reason, outcome, latency. Never tokens, never request bodies.
+
+## `json`
+
+```yaml
+json:
+  int64_as_string: true
+```
+
+On by default. `int64` and `uint64` are encoded as JSON strings because values above 2^53
+do not survive a JavaScript `number`. The write direction accepts either a string or a
+number regardless, since a path parameter is always a string.
+
+## How ROS types become JSON
+
+| ROS | JSON | Notes |
+|---|---|---|
+| `bool` | boolean | |
+| `int8`..`uint32` | number | Range checked on the way in |
+| `int64`, `uint64` | string | Number when `int64_as_string: false` |
+| `float32`, `float64` | number or `null` | NaN and the infinities become `null`; JSON has no other spelling |
+| `string`, `wstring` | string | Bounded lengths are enforced |
+| `byte` (scalar) | number 0-255 | |
+| `uint8[]`, `byte[]` and sequences | base64 string | Also accepted as an array of integers on the way in |
+| other arrays and sequences | array | Fixed-size lengths and sequence bounds are enforced |
+| nested message | object | |
+
+On the way in, a field that is absent keeps the default from the ROS message definition.
+An **unknown** field is rejected rather than ignored, because silently dropping a
+misspelled field is how an operator ends up believing a command was applied.
+
+Large binary payloads (images, point clouds) are a non-goal: base64 in JSON is the wrong
+transport for them. See the non-goals in the README.

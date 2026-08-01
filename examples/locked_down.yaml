@@ -41,12 +41,12 @@ endpoints:
 
 auth:
   tokens:
-    # sha256 of the operator token. Generate with:
-    #   printf %s "$TOKEN" | sha256sum
-    - token_sha256: "3c469e9d6c5875d37a43f353d4f88e61fcf812c66eee3457465a40b0da4153e0"
+    # Generate with: printf %s "$TOKEN" | sha256sum
+    # These are the hashes of "operator-token-replace-me" and "viewer-token-replace-me".
+    - token_sha256: "8ea06aba6f22df32d21be72385bafd59ec594add649ff36e1a5c28a77eff4498"
       user: hmi-station-1
       roles: [operator]
-    - token_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    - token_sha256: "3f2d837d5c49f1aa16b4d6ac05ce10a5ab071d01165863eb8c76dcd54c0b1f00"
       user: fleet-dashboard
       roles: [viewer]
 

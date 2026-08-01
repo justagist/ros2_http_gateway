@@ -104,6 +104,10 @@ select = [
   "RUF", # ruff-specific
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["ros2_http_gateway"]
+known-local-folder = ["ros_fixtures"]
+
 [tool.ruff.lint.per-file-ignores]
 # Generated converter source is assembled from string fragments; long lines are fine.
 "ros2_http_gateway/codegen.py" = ["E501"]
@@ -115,6 +119,7 @@ warn_unreachable = true
 # rclpy and the ROS interface packages ship no type information.
 [[tool.mypy.overrides]]
 module = [
+  "numpy",
   "rclpy.*",
   "rosidl_runtime_py.*",
   "rosidl_parser.*",
@@ -127,6 +132,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["test"]
 asyncio_mode = "auto"
+# ROS ships launch_testing pytest plugins whose hookimpls predate pytest 8, so merely
+# having them importable breaks collection. Nothing here uses them: the integration tests
+# spin up an rclpy context directly.
+addopts = "-p no:launch_testing -p no:launch_ros"
 markers = [
   "ros: requires a sourced ROS 2 environment (skipped on plain Python CI)",
   "bench: performance benchmark, informational unless asserted",

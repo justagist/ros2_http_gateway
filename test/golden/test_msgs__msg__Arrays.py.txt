@@ -1,0 +1,216 @@
+# test_msgs/msg/Arrays msg_to_dict
+def to_dict(_m):
+    return {'bool_values': _m.bool_values, 'byte_values': _b64(b''.join(_m.byte_values)), 'char_values': _b64(_m.char_values.tobytes()), 'float32_values': _m.float32_values, 'float64_values': _m.float64_values, 'int8_values': _m.int8_values, 'uint8_values': _b64(_m.uint8_values.tobytes()), 'int16_values': _m.int16_values, 'uint16_values': _m.uint16_values, 'int32_values': _m.int32_values, 'uint32_values': _m.uint32_values, 'int64_values': [str(_w) for _w in _m.int64_values.tolist()], 'uint64_values': [str(_w) for _w in _m.uint64_values.tolist()], 'string_values': _m.string_values, 'basic_types_values': [{'bool_value': _i1.bool_value, 'byte_value': _i1.byte_value[0], 'char_value': _i1.char_value, 'float32_value': _i1.float32_value, 'float64_value': _i1.float64_value, 'int8_value': _i1.int8_value, 'uint8_value': _i1.uint8_value, 'int16_value': _i1.int16_value, 'uint16_value': _i1.uint16_value, 'int32_value': _i1.int32_value, 'uint32_value': _i1.uint32_value, 'int64_value': str(_i1.int64_value), 'uint64_value': str(_i1.uint64_value)} for _i1 in _m.basic_types_values], 'constants_values': [{} for _i1 in _m.constants_values], 'defaults_values': [{'bool_value': _i1.bool_value, 'byte_value': _i1.byte_value[0], 'char_value': _i1.char_value, 'float32_value': _i1.float32_value, 'float64_value': _i1.float64_value, 'int8_value': _i1.int8_value, 'uint8_value': _i1.uint8_value, 'int16_value': _i1.int16_value, 'uint16_value': _i1.uint16_value, 'int32_value': _i1.int32_value, 'uint32_value': _i1.uint32_value, 'int64_value': str(_i1.int64_value), 'uint64_value': str(_i1.uint64_value)} for _i1 in _m.defaults_values], 'bool_values_default': _m.bool_values_default, 'byte_values_default': _b64(b''.join(_m.byte_values_default)), 'char_values_default': _b64(_m.char_values_default.tobytes()), 'float32_values_default': _m.float32_values_default, 'float64_values_default': _m.float64_values_default, 'int8_values_default': _m.int8_values_default, 'uint8_values_default': _b64(_m.uint8_values_default.tobytes()), 'int16_values_default': _m.int16_values_default, 'uint16_values_default': _m.uint16_values_default, 'int32_values_default': _m.int32_values_default, 'uint32_values_default': _m.uint32_values_default, 'int64_values_default': [str(_w) for _w in _m.int64_values_default.tolist()], 'uint64_values_default': [str(_w) for _w in _m.uint64_values_default.tolist()], 'string_values_default': _m.string_values_default, 'alignment_check': _m.alignment_check}
+
+# test_msgs/msg/Arrays dict_to_msg
+def _build1(_d):
+    if type(_d) is not dict:
+        raise ConversionError('test_msgs/msg/BasicTypes: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'bool_value', 'byte_value', 'char_value', 'float32_value', 'float64_value', 'int8_value', 'uint8_value', 'int16_value', 'uint16_value', 'int32_value', 'uint32_value', 'int64_value', 'uint64_value'}
+    if _unknown:
+        raise ConversionError('test_msgs/msg/BasicTypes: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T1()
+    _v = _d.get('bool_value', _MISS)
+    if _v is not _MISS:
+        _m.bool_value = _to_bool(_v, 'test_msgs/msg/BasicTypes.bool_value')
+    _v = _d.get('byte_value', _MISS)
+    if _v is not _MISS:
+        _m.byte_value = _to_octet(_v, 'test_msgs/msg/BasicTypes.byte_value')
+    _v = _d.get('char_value', _MISS)
+    if _v is not _MISS:
+        _m.char_value = _to_int(_v, 0, 255, 'test_msgs/msg/BasicTypes.char_value')
+    _v = _d.get('float32_value', _MISS)
+    if _v is not _MISS:
+        _m.float32_value = _to_float(_v, 'test_msgs/msg/BasicTypes.float32_value')
+    _v = _d.get('float64_value', _MISS)
+    if _v is not _MISS:
+        _m.float64_value = _to_float(_v, 'test_msgs/msg/BasicTypes.float64_value')
+    _v = _d.get('int8_value', _MISS)
+    if _v is not _MISS:
+        _m.int8_value = _to_int(_v, -128, 127, 'test_msgs/msg/BasicTypes.int8_value')
+    _v = _d.get('uint8_value', _MISS)
+    if _v is not _MISS:
+        _m.uint8_value = _to_int(_v, 0, 255, 'test_msgs/msg/BasicTypes.uint8_value')
+    _v = _d.get('int16_value', _MISS)
+    if _v is not _MISS:
+        _m.int16_value = _to_int(_v, -32768, 32767, 'test_msgs/msg/BasicTypes.int16_value')
+    _v = _d.get('uint16_value', _MISS)
+    if _v is not _MISS:
+        _m.uint16_value = _to_int(_v, 0, 65535, 'test_msgs/msg/BasicTypes.uint16_value')
+    _v = _d.get('int32_value', _MISS)
+    if _v is not _MISS:
+        _m.int32_value = _to_int(_v, -2147483648, 2147483647, 'test_msgs/msg/BasicTypes.int32_value')
+    _v = _d.get('uint32_value', _MISS)
+    if _v is not _MISS:
+        _m.uint32_value = _to_int(_v, 0, 4294967295, 'test_msgs/msg/BasicTypes.uint32_value')
+    _v = _d.get('int64_value', _MISS)
+    if _v is not _MISS:
+        _m.int64_value = _to_int(_v, -9223372036854775808, 9223372036854775807, 'test_msgs/msg/BasicTypes.int64_value')
+    _v = _d.get('uint64_value', _MISS)
+    if _v is not _MISS:
+        _m.uint64_value = _to_int(_v, 0, 18446744073709551615, 'test_msgs/msg/BasicTypes.uint64_value')
+    return _m
+
+def _build2(_d):
+    if type(_d) is not dict:
+        raise ConversionError('test_msgs/msg/Constants: expected an object, got ' + repr(_d))
+    if _d:
+        raise ConversionError('test_msgs/msg/Constants: unknown field(s) ' + ', '.join(sorted(_d)))
+    _m = _T2()
+    return _m
+
+def _build3(_d):
+    if type(_d) is not dict:
+        raise ConversionError('test_msgs/msg/Defaults: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'bool_value', 'byte_value', 'char_value', 'float32_value', 'float64_value', 'int8_value', 'uint8_value', 'int16_value', 'uint16_value', 'int32_value', 'uint32_value', 'int64_value', 'uint64_value'}
+    if _unknown:
+        raise ConversionError('test_msgs/msg/Defaults: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T3()
+    _v = _d.get('bool_value', _MISS)
+    if _v is not _MISS:
+        _m.bool_value = _to_bool(_v, 'test_msgs/msg/Defaults.bool_value')
+    _v = _d.get('byte_value', _MISS)
+    if _v is not _MISS:
+        _m.byte_value = _to_octet(_v, 'test_msgs/msg/Defaults.byte_value')
+    _v = _d.get('char_value', _MISS)
+    if _v is not _MISS:
+        _m.char_value = _to_int(_v, 0, 255, 'test_msgs/msg/Defaults.char_value')
+    _v = _d.get('float32_value', _MISS)
+    if _v is not _MISS:
+        _m.float32_value = _to_float(_v, 'test_msgs/msg/Defaults.float32_value')
+    _v = _d.get('float64_value', _MISS)
+    if _v is not _MISS:
+        _m.float64_value = _to_float(_v, 'test_msgs/msg/Defaults.float64_value')
+    _v = _d.get('int8_value', _MISS)
+    if _v is not _MISS:
+        _m.int8_value = _to_int(_v, -128, 127, 'test_msgs/msg/Defaults.int8_value')
+    _v = _d.get('uint8_value', _MISS)
+    if _v is not _MISS:
+        _m.uint8_value = _to_int(_v, 0, 255, 'test_msgs/msg/Defaults.uint8_value')
+    _v = _d.get('int16_value', _MISS)
+    if _v is not _MISS:
+        _m.int16_value = _to_int(_v, -32768, 32767, 'test_msgs/msg/Defaults.int16_value')
+    _v = _d.get('uint16_value', _MISS)
+    if _v is not _MISS:
+        _m.uint16_value = _to_int(_v, 0, 65535, 'test_msgs/msg/Defaults.uint16_value')
+    _v = _d.get('int32_value', _MISS)
+    if _v is not _MISS:
+        _m.int32_value = _to_int(_v, -2147483648, 2147483647, 'test_msgs/msg/Defaults.int32_value')
+    _v = _d.get('uint32_value', _MISS)
+    if _v is not _MISS:
+        _m.uint32_value = _to_int(_v, 0, 4294967295, 'test_msgs/msg/Defaults.uint32_value')
+    _v = _d.get('int64_value', _MISS)
+    if _v is not _MISS:
+        _m.int64_value = _to_int(_v, -9223372036854775808, 9223372036854775807, 'test_msgs/msg/Defaults.int64_value')
+    _v = _d.get('uint64_value', _MISS)
+    if _v is not _MISS:
+        _m.uint64_value = _to_int(_v, 0, 18446744073709551615, 'test_msgs/msg/Defaults.uint64_value')
+    return _m
+
+def _build0(_d):
+    if type(_d) is not dict:
+        raise ConversionError('test_msgs/msg/Arrays: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'bool_values', 'byte_values', 'char_values', 'float32_values', 'float64_values', 'int8_values', 'uint8_values', 'int16_values', 'uint16_values', 'int32_values', 'uint32_values', 'int64_values', 'uint64_values', 'string_values', 'basic_types_values', 'constants_values', 'defaults_values', 'bool_values_default', 'byte_values_default', 'char_values_default', 'float32_values_default', 'float64_values_default', 'int8_values_default', 'uint8_values_default', 'int16_values_default', 'uint16_values_default', 'int32_values_default', 'uint32_values_default', 'int64_values_default', 'uint64_values_default', 'string_values_default', 'alignment_check'}
+    if _unknown:
+        raise ConversionError('test_msgs/msg/Arrays: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T0()
+    _v = _d.get('bool_values', _MISS)
+    if _v is not _MISS:
+        _m.bool_values = [_to_bool(_j1, 'test_msgs/msg/Arrays.bool_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.bool_values')]
+    _v = _d.get('byte_values', _MISS)
+    if _v is not _MISS:
+        _m.byte_values = _octet_list(_v, 3, None, 'test_msgs/msg/Arrays.byte_values')
+    _v = _d.get('char_values', _MISS)
+    if _v is not _MISS:
+        _m.char_values = _np.frombuffer(_bytes_of(_v, 3, None, 'test_msgs/msg/Arrays.char_values'), dtype=_np.uint8)
+    _v = _d.get('float32_values', _MISS)
+    if _v is not _MISS:
+        _m.float32_values = _np.array([_to_float(_j1, 'test_msgs/msg/Arrays.float32_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.float32_values')], dtype=_np.float32)
+    _v = _d.get('float64_values', _MISS)
+    if _v is not _MISS:
+        _m.float64_values = _np.array([_to_float(_j1, 'test_msgs/msg/Arrays.float64_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.float64_values')], dtype=_np.float64)
+    _v = _d.get('int8_values', _MISS)
+    if _v is not _MISS:
+        _m.int8_values = _np.array([_to_int(_j1, -128, 127, 'test_msgs/msg/Arrays.int8_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int8_values')], dtype=_np.int8)
+    _v = _d.get('uint8_values', _MISS)
+    if _v is not _MISS:
+        _m.uint8_values = _np.frombuffer(_bytes_of(_v, 3, None, 'test_msgs/msg/Arrays.uint8_values'), dtype=_np.uint8)
+    _v = _d.get('int16_values', _MISS)
+    if _v is not _MISS:
+        _m.int16_values = _np.array([_to_int(_j1, -32768, 32767, 'test_msgs/msg/Arrays.int16_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int16_values')], dtype=_np.int16)
+    _v = _d.get('uint16_values', _MISS)
+    if _v is not _MISS:
+        _m.uint16_values = _np.array([_to_int(_j1, 0, 65535, 'test_msgs/msg/Arrays.uint16_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.uint16_values')], dtype=_np.uint16)
+    _v = _d.get('int32_values', _MISS)
+    if _v is not _MISS:
+        _m.int32_values = _np.array([_to_int(_j1, -2147483648, 2147483647, 'test_msgs/msg/Arrays.int32_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int32_values')], dtype=_np.int32)
+    _v = _d.get('uint32_values', _MISS)
+    if _v is not _MISS:
+        _m.uint32_values = _np.array([_to_int(_j1, 0, 4294967295, 'test_msgs/msg/Arrays.uint32_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.uint32_values')], dtype=_np.uint32)
+    _v = _d.get('int64_values', _MISS)
+    if _v is not _MISS:
+        _m.int64_values = _np.array([_to_int(_j1, -9223372036854775808, 9223372036854775807, 'test_msgs/msg/Arrays.int64_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int64_values')], dtype=_np.int64)
+    _v = _d.get('uint64_values', _MISS)
+    if _v is not _MISS:
+        _m.uint64_values = _np.array([_to_int(_j1, 0, 18446744073709551615, 'test_msgs/msg/Arrays.uint64_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.uint64_values')], dtype=_np.uint64)
+    _v = _d.get('string_values', _MISS)
+    if _v is not _MISS:
+        _m.string_values = [_to_str(_j1, 'test_msgs/msg/Arrays.string_values') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.string_values')]
+    _v = _d.get('basic_types_values', _MISS)
+    if _v is not _MISS:
+        _m.basic_types_values = [_build1(_j1) for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.basic_types_values')]
+    _v = _d.get('constants_values', _MISS)
+    if _v is not _MISS:
+        _m.constants_values = [_build2(_j1) for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.constants_values')]
+    _v = _d.get('defaults_values', _MISS)
+    if _v is not _MISS:
+        _m.defaults_values = [_build3(_j1) for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.defaults_values')]
+    _v = _d.get('bool_values_default', _MISS)
+    if _v is not _MISS:
+        _m.bool_values_default = [_to_bool(_j1, 'test_msgs/msg/Arrays.bool_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.bool_values_default')]
+    _v = _d.get('byte_values_default', _MISS)
+    if _v is not _MISS:
+        _m.byte_values_default = _octet_list(_v, 3, None, 'test_msgs/msg/Arrays.byte_values_default')
+    _v = _d.get('char_values_default', _MISS)
+    if _v is not _MISS:
+        _m.char_values_default = _np.frombuffer(_bytes_of(_v, 3, None, 'test_msgs/msg/Arrays.char_values_default'), dtype=_np.uint8)
+    _v = _d.get('float32_values_default', _MISS)
+    if _v is not _MISS:
+        _m.float32_values_default = _np.array([_to_float(_j1, 'test_msgs/msg/Arrays.float32_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.float32_values_default')], dtype=_np.float32)
+    _v = _d.get('float64_values_default', _MISS)
+    if _v is not _MISS:
+        _m.float64_values_default = _np.array([_to_float(_j1, 'test_msgs/msg/Arrays.float64_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.float64_values_default')], dtype=_np.float64)
+    _v = _d.get('int8_values_default', _MISS)
+    if _v is not _MISS:
+        _m.int8_values_default = _np.array([_to_int(_j1, -128, 127, 'test_msgs/msg/Arrays.int8_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int8_values_default')], dtype=_np.int8)
+    _v = _d.get('uint8_values_default', _MISS)
+    if _v is not _MISS:
+        _m.uint8_values_default = _np.frombuffer(_bytes_of(_v, 3, None, 'test_msgs/msg/Arrays.uint8_values_default'), dtype=_np.uint8)
+    _v = _d.get('int16_values_default', _MISS)
+    if _v is not _MISS:
+        _m.int16_values_default = _np.array([_to_int(_j1, -32768, 32767, 'test_msgs/msg/Arrays.int16_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int16_values_default')], dtype=_np.int16)
+    _v = _d.get('uint16_values_default', _MISS)
+    if _v is not _MISS:
+        _m.uint16_values_default = _np.array([_to_int(_j1, 0, 65535, 'test_msgs/msg/Arrays.uint16_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.uint16_values_default')], dtype=_np.uint16)
+    _v = _d.get('int32_values_default', _MISS)
+    if _v is not _MISS:
+        _m.int32_values_default = _np.array([_to_int(_j1, -2147483648, 2147483647, 'test_msgs/msg/Arrays.int32_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int32_values_default')], dtype=_np.int32)
+    _v = _d.get('uint32_values_default', _MISS)
+    if _v is not _MISS:
+        _m.uint32_values_default = _np.array([_to_int(_j1, 0, 4294967295, 'test_msgs/msg/Arrays.uint32_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.uint32_values_default')], dtype=_np.uint32)
+    _v = _d.get('int64_values_default', _MISS)
+    if _v is not _MISS:
+        _m.int64_values_default = _np.array([_to_int(_j1, -9223372036854775808, 9223372036854775807, 'test_msgs/msg/Arrays.int64_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.int64_values_default')], dtype=_np.int64)
+    _v = _d.get('uint64_values_default', _MISS)
+    if _v is not _MISS:
+        _m.uint64_values_default = _np.array([_to_int(_j1, 0, 18446744073709551615, 'test_msgs/msg/Arrays.uint64_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.uint64_values_default')], dtype=_np.uint64)
+    _v = _d.get('string_values_default', _MISS)
+    if _v is not _MISS:
+        _m.string_values_default = [_to_str(_j1, 'test_msgs/msg/Arrays.string_values_default') for _j1 in _check_len(_v, 3, 'test_msgs/msg/Arrays.string_values_default')]
+    _v = _d.get('alignment_check', _MISS)
+    if _v is not _MISS:
+        _m.alignment_check = _to_int(_v, -2147483648, 2147483647, 'test_msgs/msg/Arrays.alignment_check')
+    return _m
+
+def from_dict(_d):
+    return _build0(_d)

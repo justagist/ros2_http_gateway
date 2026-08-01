@@ -1,0 +1,38 @@
+# std_msgs/msg/Header msg_to_dict
+def to_dict(_m):
+    _t1 = _m.stamp
+    return {'stamp': {'sec': _t1.sec, 'nanosec': _t1.nanosec}, 'frame_id': _m.frame_id}
+
+# std_msgs/msg/Header dict_to_msg
+def _build1(_d):
+    if type(_d) is not dict:
+        raise ConversionError('builtin_interfaces/msg/Time: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'sec', 'nanosec'}
+    if _unknown:
+        raise ConversionError('builtin_interfaces/msg/Time: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T1()
+    _v = _d.get('sec', _MISS)
+    if _v is not _MISS:
+        _m.sec = _to_int(_v, -2147483648, 2147483647, 'builtin_interfaces/msg/Time.sec')
+    _v = _d.get('nanosec', _MISS)
+    if _v is not _MISS:
+        _m.nanosec = _to_int(_v, 0, 4294967295, 'builtin_interfaces/msg/Time.nanosec')
+    return _m
+
+def _build0(_d):
+    if type(_d) is not dict:
+        raise ConversionError('std_msgs/msg/Header: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'stamp', 'frame_id'}
+    if _unknown:
+        raise ConversionError('std_msgs/msg/Header: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T0()
+    _v = _d.get('stamp', _MISS)
+    if _v is not _MISS:
+        _m.stamp = _build1(_v)
+    _v = _d.get('frame_id', _MISS)
+    if _v is not _MISS:
+        _m.frame_id = _to_str(_v, 'std_msgs/msg/Header.frame_id')
+    return _m
+
+def from_dict(_d):
+    return _build0(_d)

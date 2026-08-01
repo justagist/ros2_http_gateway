@@ -64,9 +64,11 @@ endpoints:
 
 auth:
   tokens:
-    # Plaintext tokens are hashed on load and logged as a loud warning. Use
-    # token_sha256 in anything you would not push to a public branch.
-    - token: dev-token-change-me
+    # sha256 of the literal string "dev-token-change-me", so the quickstart curl works
+    # out of the box. A plaintext `token:` is also accepted, but it is hashed on load with
+    # a loud warning and refused outright if the config file is world-readable -- which a
+    # git checkout always is, so it cannot be demonstrated in a committed example.
+    - token_sha256: "f01d2474fd375b4c5eb46064b550034167661b86322f1e1d3cb7645512a06607"
       user: dev-workstation
       roles: [viewer, operator]
 

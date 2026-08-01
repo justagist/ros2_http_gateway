@@ -1,0 +1,42 @@
+# geometry_msgs/msg/Twist msg_to_dict
+def to_dict(_m):
+    _t1 = _m.linear
+    _t2 = _m.angular
+    return {'linear': {'x': _t1.x, 'y': _t1.y, 'z': _t1.z}, 'angular': {'x': _t2.x, 'y': _t2.y, 'z': _t2.z}}
+
+# geometry_msgs/msg/Twist dict_to_msg
+def _build1(_d):
+    if type(_d) is not dict:
+        raise ConversionError('geometry_msgs/msg/Vector3: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'x', 'y', 'z'}
+    if _unknown:
+        raise ConversionError('geometry_msgs/msg/Vector3: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T1()
+    _v = _d.get('x', _MISS)
+    if _v is not _MISS:
+        _m.x = _to_float(_v, 'geometry_msgs/msg/Vector3.x')
+    _v = _d.get('y', _MISS)
+    if _v is not _MISS:
+        _m.y = _to_float(_v, 'geometry_msgs/msg/Vector3.y')
+    _v = _d.get('z', _MISS)
+    if _v is not _MISS:
+        _m.z = _to_float(_v, 'geometry_msgs/msg/Vector3.z')
+    return _m
+
+def _build0(_d):
+    if type(_d) is not dict:
+        raise ConversionError('geometry_msgs/msg/Twist: expected an object, got ' + repr(_d))
+    _unknown = _d.keys() - {'linear', 'angular'}
+    if _unknown:
+        raise ConversionError('geometry_msgs/msg/Twist: unknown field(s) ' + ', '.join(sorted(_unknown)))
+    _m = _T0()
+    _v = _d.get('linear', _MISS)
+    if _v is not _MISS:
+        _m.linear = _build1(_v)
+    _v = _d.get('angular', _MISS)
+    if _v is not _MISS:
+        _m.angular = _build1(_v)
+    return _m
+
+def from_dict(_d):
+    return _build0(_d)

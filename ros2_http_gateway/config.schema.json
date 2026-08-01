@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/justagist/ros2_http_gateway/blob/main/ros2_http_gateway/config.schema.json",
+  "title": "ros2_http_gateway configuration",
+  "description": "Declares the complete HTTP surface of a gateway instance. Nothing not named here is reachable.",
+  "type": "object",
+  "required": ["endpoints", "auth"],
+  "additionalProperties": false,
+  "properties": {
+    "defaults": {
+      "description": "Merged into every endpoint that does not set the key itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "roles": { "$ref": "#/$defs/roles" },
+        "stale_after_ms": { "$ref": "#/$defs/staleAfterMs" },
+        "timeout_ms": { "$ref": "#/$defs/timeoutMs" }
+      }
+    },
+    "endpoints": {
+      "description": "HTTP path -> what it exposes. The key is the path, relative to http.base_path.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/httpPath" },
+      "additionalProperties": { "$ref": "#/$defs/endpoint" }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "tokens": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/token" }
+        }
+      }
+    },
+    "sse": {
+      "type": "object",
+      "required": ["include"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/httpPath" },
+        "include": {
+          "description": "Endpoint keys to stream. Topic endpoints only.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "overflow": { "enum": ["drop_oldest", "disconnect"] },
+        "max_clients": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "description": "Defaults to localhost. Exposing the gateway needs an explicit 0.0.0.0.",
+          "type": "string",
+          "minLength": 1
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "base_path": { "$ref": "#/$defs/basePath" }
+      }
+    },
+    "ros": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "executor": {
+          "description": "auto picks EventsExecutor where it exists and MultiThreadedExecutor otherwise.",
+          "enum": ["auto", "events", "multithreaded"]
+        }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_ttl_s": {
+          "description": "How long a terminal goal stays queryable before eviction.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sink": { "enum": ["stderr", "file"] },
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "sink": { "const": "file" } }, "required": ["sink"] },
+      "then": { "required": ["path"] }
+    },
+    "json": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "int64_as_string": {
+          "description": "Emit int64/uint64 as JSON strings. On by default: values above 2^53 do not survive a JavaScript number.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "staleAfterMs": { "type": "integer", "minimum": 0 },
+    "timeoutMs": { "type": "integer", "exclusiveMinimum": 0 },
+    "httpPath": {
+      "type": "string",
+      "pattern": "^/(?:[A-Za-z0-9._~-]+|\\{[A-Za-z_][A-Za-z0-9_]*\\})(?:/(?:[A-Za-z0-9._~-]+|\\{[A-Za-z_][A-Za-z0-9_]*\\}))*$"
+    },
+    "basePath": {
+      "description": "API prefix. A trailing slash is accepted and stripped; \"/\" means no prefix.",
+      "type": "string",
+      "pattern": "^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?/?$"
+    },
+    "rosName": {
+      "description": "Absolute or root-relative ROS name. Private (~) names are not accepted: the gateway node's own name is an implementation detail.",
+      "type": "string",
+      "pattern": "^/?[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "interfaceType": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*/(msg|srv|action)/[A-Za-z][A-Za-z0-9]*$"
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["topic"] },
+        { "required": ["service"] },
+        { "required": ["action"] }
+      ],
+      "properties": {
+        "topic": { "$ref": "#/$defs/rosName" },
+        "service": { "$ref": "#/$defs/rosName" },
+        "action": { "$ref": "#/$defs/rosName" },
+        "type": {
+          "description": "Omit to resolve from the ROS graph at startup.",
+          "$ref": "#/$defs/interfaceType"
+        },
+        "method": { "enum": ["GET", "POST"] },
+        "roles": { "$ref": "#/$defs/roles" },
+        "stale_after_ms": { "$ref": "#/$defs/staleAfterMs" },
+        "timeout_ms": { "$ref": "#/$defs/timeoutMs" },
+        "request_map": {
+          "description": "Request field (dotted) -> template drawing on path parameters.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
+        "preconditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/precondition" }
+        }
+      }
+    },
+    "precondition": {
+      "type": "object",
+      "required": ["state_endpoint", "field", "allow"],
+      "additionalProperties": false,
+      "properties": {
+        "state_endpoint": {
+          "description": "Another configured topic endpoint whose latest sample is checked.",
+          "type": "string"
+        },
+        "field": {
+          "description": "Dotted field path within that endpoint's message.",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        },
+        "key": {
+          "description": "Path parameter keying the allow map, e.g. \"{command}\". Defaults to the sole path parameter.",
+          "type": "string",
+          "pattern": "^\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+        },
+        "allow": {
+          "description": "Parameter value (or \"*\") -> permitted states (or [\"*\"]).",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "token": {
+      "type": "object",
+      "required": ["user", "roles"],
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["token"] }, { "required": ["token_sha256"] }],
+      "properties": {
+        "token": {
+          "description": "Plaintext. Hashed on load, warned about loudly, and refused outright if the config file is world-readable.",
+          "type": "string",
+          "minLength": 8
+        },
+        "token_sha256": {
+          "description": "Lowercase hex sha256 of the bearer token.",
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "user": { "type": "string", "minLength": 1 },
+        "roles": { "$ref": "#/$defs/roles" }
+      }
+    }
+  }
+}

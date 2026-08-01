@@ -10,9 +10,13 @@ import argparse
 import logging
 import sys
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from ._version import __version__
 from .ros_env import RosEnvironmentError, require_rclpy
+
+if TYPE_CHECKING:
+    from .resolve import ResolvedConfig
 
 _LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 
@@ -20,7 +24,6 @@ _EPILOG = """\
 examples:
   ros2-http-gateway config.yaml                 serve the gateway
   ros2-http-gateway --check config.yaml         validate config and exit (CI friendly)
-  ros2-http-gateway --check --dump-openapi openapi.json config.yaml
 """
 
 
@@ -49,11 +52,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=5.0,
         metavar="SECONDS",
         help="how long to wait for the ROS graph while resolving types (default: 5)",
-    )
-    parser.add_argument(
-        "--dump-openapi",
-        metavar="PATH",
-        help="write the generated OpenAPI 3.1 document to PATH (implies --check)",
     )
     parser.add_argument(
         "--log-level",
@@ -87,14 +85,48 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    # Phase 1 replaces this with config load + graph type resolution + codegen, and
-    # phase 2 adds the serve path. Kept explicit so the tree never pretends to work.
+    # Imported here, not at module scope, so --help and --version stay ROS-free.
+    from .config import ConfigError, load_config
+    from .resolve import resolve
+
+    try:
+        config = load_config(args.config)
+        resolved = resolve(config, discovery_timeout=args.discovery_timeout)
+    except ConfigError as exc:
+        print(f"error: {exc.format()}", file=sys.stderr)
+        return 1
+
+    if args.check:
+        _report_check(resolved)
+        return 0
+
+    # The serve path lands in phase 2.
     print(
-        "error: the config engine lands in phase 1 and the server in phase 2; "
-        "this build only provides the packaging skeleton.",
+        "error: the HTTP server lands in phase 2; use --check to validate a config today.",
         file=sys.stderr,
     )
     return 1
+
+
+def _report_check(resolved: ResolvedConfig) -> None:
+    """Print a one-line-per-endpoint summary of a successful validation."""
+    config = resolved.config
+    print(f"{config.source}: ok")
+    for path in sorted(resolved.endpoints):
+        endpoint = resolved.endpoints[path]
+        roles = ",".join(sorted(endpoint.config.roles))
+        base = config.http.base_path
+        print(
+            f"  {endpoint.config.method:4s} {base}{path:32s} "
+            f"{endpoint.config.kind:7s} {endpoint.ros_name} [{endpoint.type_name}] roles={roles}"
+        )
+    if config.sse is not None:
+        streamed = ", ".join(config.sse.include)
+        print(f"  SSE  {config.http.base_path}{config.sse.path} -> {streamed}")
+    print(
+        f"  {len(config.tokens)} token(s), executor={config.ros.executor}, "
+        f"audit={config.audit.sink}, int64_as_string={config.json.int64_as_string}"
+    )
 
 
 if __name__ == "__main__":
