@@ -132,6 +132,14 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- A per-goal stream whose client had fallen behind could strand every other listener on that
+  goal. The terminal sentinel used an unguarded put and raised `QueueFull` on a saturated queue,
+  which abandoned the remaining subscribers without a closing event.
+- A running goal now reports `executing` rather than staying `accepted` until it finishes. A
+  terminal status is still only reported once the result is available, so it always arrives with
+  one.
+- Feedback arriving after a goal finished no longer changes its recorded last feedback.
+
 - A racing staleness test: it read the cache while publishes were still in flight, so the
   sample could change under an assertion that it would not. Tests now wait for the publisher
   to go quiet first.

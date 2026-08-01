@@ -16,6 +16,7 @@ task, and an idle gateway does no work at all.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -23,6 +24,8 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 import orjson
+
+_LOG = logging.getLogger(__name__)
 
 __all__ = [
     "TERMINAL",
@@ -94,12 +97,37 @@ class GoalRecord:
         """Whether this goal has finished, one way or another."""
         return self.status in TERMINAL
 
+    def current_status(self) -> str:
+        """The status to report: live from the goal handle while the goal is still running.
+
+        The action client already tracks status through its own status subscription, so
+        ``executing`` need not be inferred -- reading it beats leaving a running goal reported
+        as ``accepted`` until it finishes, which the protocol does not promise.
+
+        The handle is only consulted for the non-terminal progression. It reaches a terminal
+        code before the result task has collected the outcome, so trusting it there would answer
+        ``succeeded`` with ``"result": null`` for a moment -- and a terminal status has to mean
+        the result is there. Terminal therefore comes from the record alone, which is set at the
+        same instant as the result.
+
+        Two further cases keep the recorded value. Once terminal it is authoritative. And while
+        a cancellation is in flight, ``canceling`` is what this gateway has already told the
+        client, so reverting to ``executing`` because the server has not acted yet would
+        contradict its own answer.
+        """
+        if self.is_terminal or self.status == "canceling" or self.handle is None:
+            return self.status
+        live = status_name(self.handle.status)
+        if live == "unknown" or live in TERMINAL:
+            return self.status
+        return live
+
     def status_body(self) -> bytes:
         """The JSON body for a status read, built without re-encoding the payloads."""
         return b"".join(
             (
                 b'{"status":"',
-                self.status.encode("ascii"),
+                self.current_status().encode("ascii"),
                 b'","result":',
                 self.result or _NULL,
                 b',"last_feedback":',
@@ -179,6 +207,12 @@ class GoalRegistry:
         Encoded once by the caller and shared by reference, so N listeners cost N queue
         appends rather than N conversions.
         """
+        if record.is_terminal:
+            # call_soon_threadsafe ordering allows a callback scheduled from the ROS thread to
+            # land after on_terminal has run. Readers have already stopped at the sentinel, but
+            # letting last_feedback change afterwards would make two reads of a finished goal
+            # disagree.
+            return
         record.last_feedback = encoded
         if not record.subscribers:
             return
@@ -188,13 +222,26 @@ class GoalRegistry:
 
     def on_terminal(self, record: GoalRecord, status: str, result: bytes | None) -> None:
         """Mark a goal finished, then send the closing event to every stream."""
-        record.status = status
+        # Status last: it is the flag readers key on, and "terminal" has to imply the result is
+        # already there. Nothing can interleave between these lines today, since this runs on the
+        # loop with no await, but ordering them this way means that stays true even if some
+        # future caller yields.
         record.result = result
         record.terminal_at = self._clock()
+        record.status = status
         frame = terminal_frame(status, result)
         for queue in record.subscribers:
-            _offer(queue, frame)
-            queue.put_nowait(None)  # the sentinel that ends the response
+            # Both through _offer: a queue sitting at maxsize accepts the frame by dropping its
+            # oldest and is then full again, so a bare put_nowait for the sentinel raises
+            # QueueFull -- which would escape into the result task, abandon every subscriber
+            # after this one without a frame or a sentinel, and leave their streams open until
+            # the connection died. The sentinel is the one frame that must never be the dropped
+            # one, so it gets the same treatment with more reason, not less.
+            try:
+                _offer(queue, frame)
+                _offer(queue, None)
+            except Exception:
+                _LOG.exception("failed to close a stream for goal %s", record.goal_id)
 
     def subscribe(self, record: GoalRecord) -> asyncio.Queue[bytes | None]:
         """Attach a stream to a goal."""

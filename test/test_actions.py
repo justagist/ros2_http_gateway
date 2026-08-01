@@ -210,6 +210,51 @@ async def test_a_goal_runs_to_success_with_a_result(gateway: Harness) -> None:
     assert payload["result"] == {"sequence": [0, 1, 1, 2, 3, 5, 8]}
 
 
+async def test_a_running_goal_reports_executing(gateway: Harness) -> None:
+    """The protocol promises `executing`; the action client already tracks it.
+
+    Without reading the handle a running goal stayed `accepted` right up to its result, which
+    the documented status list does not describe.
+    """
+    goal_id = (await gateway.submit(order=60)).json()["goal_id"]
+    seen = set()
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        seen.add((await gateway.status(goal_id)).json()["status"])
+        if "executing" in seen:
+            break
+        await asyncio.sleep(0.02)
+    await gateway.cancel(goal_id)
+    assert "executing" in seen, f"only ever saw {sorted(seen)}"
+
+
+async def test_a_terminal_status_always_comes_with_a_result(gateway: Harness) -> None:
+    """The handle reports terminal before the result is collected; the status must not.
+
+    Otherwise a poll can catch `succeeded` with `"result": null`, and a client that treats a
+    terminal status as "the result is ready" reads nothing.
+    """
+    goal_id = (await gateway.submit(order=6)).json()["goal_id"]
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        payload = (await gateway.status(goal_id)).json()
+        if payload["status"] in ("succeeded", "aborted", "canceled"):
+            assert payload["result"] is not None, f"terminal status without a result: {payload}"
+            return
+        assert payload["result"] is None, f"a result before the goal finished: {payload}"
+        await asyncio.sleep(0.01)
+    raise AssertionError("the goal never finished")
+
+
+async def test_a_cancelling_goal_keeps_reporting_canceling(gateway: Harness) -> None:
+    """Live status must not contradict the answer the cancel route already gave."""
+    goal_id = (await gateway.submit(order=200)).json()["goal_id"]
+    await asyncio.sleep(0.15)
+    assert (await gateway.cancel(goal_id)).json()["success"] is True
+    status = (await gateway.status(goal_id)).json()["status"]
+    assert status in ("canceling", "canceled"), status
+
+
 async def test_feedback_is_recorded_while_the_goal_runs(gateway: Harness) -> None:
     goal_id = (await gateway.submit(order=8)).json()["goal_id"]
     payload = await gateway.wait_for(goal_id)
@@ -478,6 +523,51 @@ def test_creating_a_goal_sweeps_the_expired_ones() -> None:
     now[0] += 100.0
     registry.create("/pick")
     assert len(registry) == 1, "the sweep should have reclaimed the five expired records"
+
+
+def test_a_full_queue_still_receives_the_terminal_sentinel() -> None:
+    """The bug this pins: the sentinel used a bare put_nowait and could raise QueueFull.
+
+    A queue already at maxsize accepts the terminal frame by dropping its oldest and is then
+    full again, so the sentinel raised, the exception escaped into the result task, and every
+    subscriber after the full one got neither frame nor sentinel -- their streams staying open
+    until the connection died. Two subscribers, the first deliberately full: both must close.
+    """
+    registry = GoalRegistry(ttl_s=300.0)
+    record = registry.create("/pick")
+    full = registry.subscribe(record)
+    healthy = registry.subscribe(record)
+
+    for index in range(200):  # well past the backlog, so `full` is saturated
+        registry.on_feedback(record, orjson.dumps({"n": index}))
+    assert full.full()
+
+    registry.on_terminal(record, "succeeded", b'{"sequence":[0,1]}')
+
+    for name, queue in (("full", full), ("healthy", healthy)):
+        frames = []
+        while not queue.empty():
+            frames.append(queue.get_nowait())
+        assert frames[-1] is None, f"the {name} subscriber never got a sentinel: {frames[-2:]}"
+        assert any(f is not None and b"terminal" in f for f in frames), (
+            f"the {name} subscriber never got the terminal frame"
+        )
+
+
+def test_feedback_arriving_after_terminal_is_ignored() -> None:
+    """Scheduling order allows a ROS-side callback to land after the goal finished.
+
+    Two reads of a finished goal must not disagree, so late feedback is dropped rather than
+    overwriting what the terminal state recorded.
+    """
+    registry = GoalRegistry(ttl_s=300.0)
+    record = registry.create("/pick")
+    registry.on_feedback(record, orjson.dumps({"n": 1}))
+    registry.on_terminal(record, "succeeded", b"{}")
+
+    before = record.last_feedback
+    registry.on_feedback(record, orjson.dumps({"n": 999}))
+    assert record.last_feedback == before
 
 
 def test_a_full_stream_queue_drops_the_oldest_frame() -> None:

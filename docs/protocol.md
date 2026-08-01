@@ -183,7 +183,10 @@ An action endpoint at `/pick` generates four routes.
 ```
 
 `status` is one of `accepted`, `executing`, `canceling`, `succeeded`, `aborted`,
-`canceled`. A terminal goal stays queryable for `actions.result_ttl_s` (default 300) and
+`canceled`. A terminal status always comes with a `result`: the underlying goal handle reports
+terminal slightly before the result has been collected, and the gateway deliberately keeps
+reporting the running status until it has both, so a client may treat a terminal status as
+"the result is ready". A terminal goal stays queryable for `actions.result_ttl_s` (default 300) and
 then returns 404 with `UNKNOWN_GOAL`, the same as an id that never existed.
 
 Goal ids are namespaced per endpoint: two endpoints pointing at the same action do not share
@@ -203,8 +206,12 @@ feature.
 `timeout_ms` bounds the accept/reject handshake, not the goal. An action is long-running by
 definition, so there is no deadline on its result.
 
-The per-goal stream keeps a bounded backlog per client. A client that cannot keep up loses its
-oldest queued feedback rather than stalling the goal; ordering is preserved.
+The per-goal stream keeps a bounded backlog per client (64 frames, not configurable, unlike the
+global stream's `sse.overflow`). A client that cannot keep up loses its **oldest** queued
+feedback rather than stalling the goal, so **gaps in feedback are expected behaviour under a
+slow reader, not a fault**: ordering is preserved and the terminal event is never dropped.
+Feedback is progress reporting; if you need every message, read the action's feedback topic
+directly.
 
 Because a derived route could otherwise be shadowed, a config where another endpoint would
 collide with `/pick/{goal_id}` is rejected at startup.
