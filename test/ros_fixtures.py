@@ -89,32 +89,56 @@ def populate(msg_type: type, counter: itertools.count[int] | None = None) -> Any
     return msg
 
 
-def has_fieldless_message(msg_type: type) -> bool:
-    """Whether the type tree contains a message with no fields at all.
+def assert_messages_equal(left: Any, right: Any, where: str = "") -> None:
+    """Assert two messages are field-for-field equal.
 
-    rosidl gives a field-less message a hidden ``structure_needs_at_least_one_member``
-    byte to keep the C struct legal, and does not initialise it. Two default instances of
-    ``test_msgs/Empty`` therefore serialise to different bytes, so comparing serialised
-    messages is unsound for any type that contains one, directly or transitively
-    (``MultiNested`` -> ``Arrays`` -> ``Constants[3]``). Such types are compared through
-    their JSON encoding instead, which is all the gateway can observe anyway.
+    Replaces comparing ``serialize_message`` output, which is unsound: CDR inserts alignment
+    padding between fields of differing widths, and rosidl does not initialise it. Two
+    independently constructed default ``test_msgs/BasicTypes`` messages were measured
+    differing at bytes 26-27 roughly once in two hundred attempts, purely from whatever the
+    heap happened to contain. That produced a rare, baffling failure in a full suite run.
+
+    Walking the declared fields is also stronger than comparing the JSON encodings, because it
+    reads the messages themselves: a converter that lost precision in both directions would
+    still be caught here, where two equal JSON documents would hide it.
 
     Args:
-        msg_type: A generated ROS message class.
+        left: A message instance.
+        right: Another instance of the same type.
+        where: Dotted path used in the assertion message.
 
-    Returns:
-        True when the tree contains a message with no declared fields.
+    Raises:
+        AssertionError: On the first field that differs, naming its path.
     """
-    fields = msg_type.get_fields_and_field_types()
-    if not fields:
-        return True
-    for slot in msg_type.SLOT_TYPES:
-        nested = slot.value_type if isinstance(slot, AbstractNestedType) else slot
-        if isinstance(nested, NamespacedType) and has_fieldless_message(
-            get_message("/".join((*nested.namespaces, nested.name)))
-        ):
-            return True
-    return False
+    for name, slot in zip(
+        type(left).get_fields_and_field_types().keys(), type(left).SLOT_TYPES, strict=True
+    ):
+        path = f"{where}.{name}" if where else name
+        _assert_value_equal(getattr(left, name), getattr(right, name), slot, path)
+
+
+def _assert_value_equal(left: Any, right: Any, slot: Any, path: str) -> None:
+    if isinstance(slot, NamespacedType):
+        assert_messages_equal(left, right, path)
+        return
+
+    if isinstance(slot, AbstractNestedType):
+        element = slot.value_type
+        as_list_left, as_list_right = _as_list(left), _as_list(right)
+        assert len(as_list_left) == len(as_list_right), f"{path}: different lengths"
+        for index, (one, two) in enumerate(zip(as_list_left, as_list_right, strict=True)):
+            _assert_value_equal(one, two, element, f"{path}[{index}]")
+        return
+
+    assert left == right, f"{path}: {left!r} != {right!r}"
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Flatten a collection field, whatever container rclpy chose for it."""
+    if hasattr(value, "tolist"):
+        listed = value.tolist()
+        return list(listed) if isinstance(listed, list) else [listed]
+    return list(value)
 
 
 def declared_field_tree(msg_type: type) -> dict[str, Any]:

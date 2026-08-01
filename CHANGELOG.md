@@ -100,6 +100,11 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- Round-trip tests no longer compare serialised CDR bytes. CDR pads between fields of
+  differing widths and rosidl leaves that padding uninitialised, so two independently built
+  messages could differ in bytes no field maps to; measured about once in two hundred
+  attempts on `test_msgs/BasicTypes`. They now compare field by field, which is also stronger
+  than comparing the JSON encodings.
 - A handler that raises is now audited (status 500, `outcome: INTERNAL`) and answered with the
   standard error envelope. It previously escaped to Starlette's error machinery, leaving no
   record of exactly the request an incident review would care about.

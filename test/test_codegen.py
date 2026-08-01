@@ -33,8 +33,8 @@ from ros2_http_gateway.codegen import (
 from ros_fixtures import (
     ALL_TYPES,
     BIG_INT64,
+    assert_messages_equal,
     declared_field_tree,
-    has_fieldless_message,
     populate,
 )
 
@@ -59,22 +59,18 @@ def _json_round_trip(value: object) -> object:
 
 
 def assert_identical(cls: type, original: object, rebuilt: object) -> None:
-    """Assert two messages are indistinguishable.
+    """Assert two messages are indistinguishable, field by field.
 
-    Serialised bytes are the strongest comparison and are used wherever they are sound.
-    They are not sound for a type tree containing a field-less message: rosidl gives those
-    a hidden, uninitialised ``structure_needs_at_least_one_member`` byte, so two default
-    instances can differ in a byte no field maps to. Those types are compared through
-    their JSON encoding, and ``test_converter_covers_every_declared_field`` independently
-    rules out a field that both converters skipped.
+    Deliberately not ``serialize_message(a) == serialize_message(b)``. CDR pads between
+    fields of differing widths and rosidl leaves that padding uninitialised, so two
+    independently built messages can differ in bytes no field maps to. Measured on
+    ``test_msgs/BasicTypes``: bytes 26-27 differed about once in two hundred attempts once the
+    heap was churned in between, which showed up as a rare unexplained failure in a full run.
+    An earlier version of this helper only worked around the field-less-message case, which is
+    the same bug with a narrower trigger.
     """
-    if has_fieldless_message(cls):
-        to_dict = build_msg_to_dict(cls)
-        assert orjson.dumps(to_dict(rebuilt), option=ORJSON_OPTS) == orjson.dumps(
-            to_dict(original), option=ORJSON_OPTS
-        )
-    else:
-        assert serialize_message(rebuilt) == serialize_message(original)
+    del cls  # the comparison reads the types off the instances
+    assert_messages_equal(original, rebuilt)
 
 
 # --------------------------------------------------------------------------------------
