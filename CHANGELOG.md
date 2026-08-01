@@ -100,6 +100,9 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- The test suite no longer assumes every distro has an events executor, and now honours the
+  `GATEWAY_TEST_EXECUTOR` the CI matrix has been setting since the start but nothing read, so
+  each distro job exercises the executor it was asked for instead of both twice.
 - QoS profiles are built from `QoSProfile` and `qos_profile_sensor_data` rather than read off
   `QoSPresetProfiles`, whose membership varies by distro: Humble has no `DEFAULT` member, so
   every ROS test there failed at setup with `AttributeError: DEFAULT`.

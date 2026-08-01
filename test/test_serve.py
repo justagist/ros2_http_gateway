@@ -29,6 +29,7 @@ from gateway_fixtures import (
     OPERATOR_TOKEN,
     STATE_TOPIC,
     Talker,
+    available_executors,
     config_document,
     write_config,
 )
@@ -37,7 +38,7 @@ pytestmark = pytest.mark.ros
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STARTUP_TIMEOUT_S = 40.0
-EXECUTORS = ["multithreaded", "events"]
+EXECUTORS = available_executors()
 # Informational, per the brief: CI runners share cores, so this warns rather than fails.
 _CPU_WARN_PERCENT = 5.0
 

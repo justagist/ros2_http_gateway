@@ -16,14 +16,23 @@ import pytest
 
 pytest.importorskip("rclpy", reason="needs a sourced ROS 2 environment")
 
-from gateway_fixtures import Talker, resolved_config
+from gateway_fixtures import (
+    Talker,
+    available_executors,
+    events_executor_available,
+    resolved_config,
+)
 
 from ros2_http_gateway.config import ConfigError
 from ros2_http_gateway.runtime import RosRuntime, make_executor
 
 pytestmark = pytest.mark.ros
 
-EXECUTORS = ["multithreaded", "events"]
+EXECUTORS = available_executors()
+# What the distro provides, not what this run happens to be exercising: the CI matrix narrows
+# EXECUTORS through the environment, and a multithreaded-only run on a distro that has the
+# events executor must not be mistaken for a distro that lacks it.
+HAS_EVENTS = events_executor_available()
 
 
 @pytest.fixture(params=EXECUTORS)
@@ -56,6 +65,7 @@ def test_multithreaded_is_selected_when_asked_for() -> None:
         context.try_shutdown()
 
 
+@pytest.mark.skipif(not HAS_EVENTS, reason="this distro has no EventsExecutor")
 def test_auto_prefers_the_events_executor_where_it_exists() -> None:
     import rclpy
 
@@ -64,6 +74,21 @@ def test_auto_prefers_the_events_executor_where_it_exists() -> None:
     try:
         _, name = make_executor("auto", context)
         assert name == "EventsExecutor"
+    finally:
+        context.try_shutdown()
+
+
+@pytest.mark.skipif(HAS_EVENTS, reason="this distro has an EventsExecutor")
+def test_auto_uses_the_threaded_executor_where_events_is_absent() -> None:
+    """The Humble side of the same coin, asserted for real rather than by monkeypatch."""
+    import rclpy
+
+    context = rclpy.context.Context()
+    context.init()
+    try:
+        executor, name = make_executor("auto", context)
+        assert name == "MultiThreadedExecutor"
+        executor.shutdown()
     finally:
         context.try_shutdown()
 

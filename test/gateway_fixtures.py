@@ -7,6 +7,8 @@ Importing this module without ROS skips the importing test module, same as
 from __future__ import annotations
 
 import copy
+import importlib.util
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,46 @@ from example_interfaces.msg import String
 
 from ros2_http_gateway.config import load_config
 from ros2_http_gateway.resolve import ResolvedConfig, resolve
+
+EXECUTOR_ENV = "GATEWAY_TEST_EXECUTOR"
+
+
+def events_executor_available() -> bool:
+    """Whether this distro provides ``rclpy.experimental.EventsExecutor`` at all.
+
+    Deliberately distinct from :func:`available_executors`, which the CI matrix narrows through
+    the environment. A run restricted to ``multithreaded`` on a distro that does have the events
+    executor must not conclude the distro lacks it.
+
+    Returns:
+        True when the module is importable.
+    """
+    return importlib.util.find_spec("rclpy.experimental") is not None
+
+
+def available_executors() -> list[str]:
+    """Which executors this distro can actually run.
+
+    Humble has no ``rclpy.experimental``, so parametrising over ``events`` there would only
+    assert that our own startup error fires -- which
+    ``test_events_requested_but_missing_is_a_startup_error`` already does deliberately, with a
+    simulated import failure, on every distro.
+
+    ``GATEWAY_TEST_EXECUTOR`` narrows the list further. That is how the CI matrix runs a distro
+    once per executor rather than both in a single job; a request for something this distro
+    cannot provide is ignored rather than silently skipping the tests.
+
+    Returns:
+        Executor names to parametrise over, never empty.
+    """
+    available = ["multithreaded"]
+    if events_executor_available():
+        available.append("events")
+    requested = os.environ.get(EXECUTOR_ENV)
+    if requested and requested in available:
+        return [requested]
+    return available
+
 
 STATE_TOPIC = "/gateway_test_state"
 COMMAND_TOPIC = "/gateway_test_command"
