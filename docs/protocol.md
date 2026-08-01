@@ -132,6 +132,10 @@ to distinguish "the gateway could not ask" from "the robot said no". On `TIMEOUT
 A timed-out request is withdrawn from the client, so a late reply can never be mistaken for
 the answer to a subsequent call.
 
+`SERVICE_UNAVAILABLE` reflects readiness at the moment of the call. A server that disappears
+between the readiness check and the call, or mid-call, reports `TIMEOUT` after the full wait
+rather than `SERVICE_UNAVAILABLE`.
+
 ### Preconditions
 
 A configured precondition is evaluated before the call is forwarded. A refusal is HTTP 200

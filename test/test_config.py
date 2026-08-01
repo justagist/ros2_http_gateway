@@ -31,6 +31,8 @@ MINIMAL: dict[str, Any] = {
             "topic": "/mission/state",
             "type": "example_interfaces/msg/String",
             "roles": ["viewer"],
+            # Required of any endpoint a precondition reads; several tests below gate on this one.
+            "stale_after_ms": 2000,
         }
     },
     "auth": {
@@ -433,6 +435,28 @@ def test_precondition_referencing_a_service_endpoint_is_rejected(tmp_path: Path)
     )
     (message,) = problems(tmp_path, document)
     assert "only a topic GET endpoint has a cached sample" in message
+
+
+def test_a_gate_on_an_unbounded_state_endpoint_is_rejected(tmp_path: Path) -> None:
+    """Without stale_after_ms the gate can never notice the state publisher died.
+
+    The policy engine refuses a stale sample, but only an endpoint with a threshold can ever be
+    stale. Left unchecked, killing the publisher leaves the gate authorising against the last
+    sample it saw, forever -- the exact failure preconditions exist to prevent.
+    """
+    document = _with_precondition(allow={"start": ["IDLE"]})
+    del document["endpoints"]["/state"]["stale_after_ms"]
+    (message,) = problems(tmp_path, document)
+    assert "has no stale_after_ms" in message
+    assert "endpoints./state" in message, "the fix names the endpoint that needs the setting"
+
+
+def test_an_sse_include_does_not_need_a_staleness_bound(tmp_path: Path) -> None:
+    """The requirement is about gating a decision, not about streaming a value."""
+    document = copy.deepcopy(MINIMAL)
+    del document["endpoints"]["/state"]["stale_after_ms"]
+    document["sse"] = {"include": ["/state"]}
+    assert load(tmp_path, document).sse is not None
 
 
 # --------------------------------------------------------------------------------------

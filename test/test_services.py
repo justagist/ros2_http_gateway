@@ -95,6 +95,10 @@ def endpoints(**overrides: Any) -> dict[str, Any]:
             "topic": STATE_TOPIC,
             "type": "example_interfaces/msg/String",
             "roles": ["viewer", "operator"],
+            # A precondition reads this, so a bound is required. Generous, so that tests which
+            # publish once and then make several calls do not age out mid-test; the staleness
+            # test below lowers it deliberately.
+            "stale_after_ms": 60000,
         },
         "/math/{a}/plus/{b}": {
             "service": ADD_SERVICE,

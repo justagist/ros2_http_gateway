@@ -36,6 +36,13 @@ _PARAM_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _TRUE: Final = frozenset({"true", "1", "yes", "on"})
 _FALSE: Final = frozenset({"false", "0", "no", "off"})
 
+# int() and float() accept more than a URL segment should be allowed to mean: "1_000" becomes
+# 1000, full-width Unicode digits parse, and float() returns NaN for "nan" and infinity for
+# "inf". None of it is unsafe, since the body converter still range-checks, but /math/1_0/plus/2
+# silently meaning 10 is a surprise and a NaN arriving from a URL is worse.
+_INTEGER_RE: Final = re.compile(r"^[+-]?[0-9]+$")
+_NUMBER_RE: Final = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+
 
 class UnsupportedTargetError(TypeError):
     """A ``request_map`` entry targets a field that text cannot sensibly fill."""
@@ -104,10 +111,14 @@ def _to_bool_text(text: str) -> bool:
 
 
 def _to_int_text(text: str) -> int:
+    if not _INTEGER_RE.match(text):
+        raise ValueError(f"expected an integer, got {text!r}")
     return int(text)
 
 
 def _to_float_text(text: str) -> float:
+    if not _NUMBER_RE.match(text):
+        raise ValueError(f"expected a number, got {text!r}")
     return float(text)
 
 
@@ -131,7 +142,11 @@ def apply_bindings(
         ValueError: If a substituted value will not convert to the target field's type.
     """
     for binding in bindings:
-        text = _PARAM_RE.sub(lambda match: params.get(match.group(1), ""), binding.template)
+        # Raises rather than substituting "": resolve has already checked every template
+        # parameter is a path parameter and the router supplies all of them, so this cannot
+        # trigger. If that invariant ever breaks a 500 is the honest answer, not a field
+        # quietly filled with the coercion of an empty string.
+        text = _PARAM_RE.sub(lambda match: params[match.group(1)], binding.template)
         try:
             value = binding.coerce(text)
         except ValueError as exc:

@@ -508,11 +508,34 @@ class _Builder:
             for index, precondition in enumerate(endpoint.preconditions):
                 spot = f"endpoints.{path}.preconditions[{index}].state_endpoint"
                 self._require_topic_read(spot, precondition.state_endpoint, endpoints)
+                self._require_staleness_bound(spot, precondition.state_endpoint, endpoints)
 
         sse = self.document.get("sse")
         if sse:
             for index, key in enumerate(sse["include"]):
                 self._require_topic_read(f"sse.include[{index}]", key, endpoints)
+
+    def _require_staleness_bound(
+        self, spot: str, key: str, endpoints: Mapping[str, EndpointConfig]
+    ) -> None:
+        """A state endpoint a gate depends on must have an age limit.
+
+        The policy engine refuses a call when the state sample is stale, but only an endpoint
+        with ``stale_after_ms`` can ever *be* stale. Without one, killing the state publisher
+        leaves the gate authorising against the last sample it ever saw, indefinitely -- which
+        is the exact failure a precondition exists to prevent. An error rather than a warning,
+        because a line in a log is not a safety control.
+        """
+        target = endpoints.get(key)
+        if target is None or not target.is_topic_read:
+            return  # already reported by _require_topic_read
+        if target.stale_after_ms is None:
+            self.fail(
+                spot,
+                f"{key!r} has no stale_after_ms, so this gate would authorise against a "
+                "sample of any age, including one from before the publisher died. Set "
+                f"stale_after_ms on endpoints.{key}",
+            )
 
     def _require_topic_read(
         self, spot: str, key: str, endpoints: Mapping[str, EndpointConfig]

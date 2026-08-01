@@ -12,9 +12,15 @@ All notable changes to this project are documented here. Format follows
   server gives `SERVICE_UNAVAILABLE` and a slow one gives `TIMEOUT`, both as HTTP 200 because
   the request itself was fine. A timed-out request is withdrawn, so a late reply cannot be
   mistaken for the answer to a later call.
-- `request_map` fills request fields from path parameters, including dotted targets. The text
+- `request_map` fills request fields from path parameters, including dotted targets. Path text
+  is checked against a plain digit pattern before conversion, so `1_0` cannot silently mean 10
+  and `nan` cannot become a float field's value. The text
   conversion for each target is chosen at startup from the field's declared type, so an
   impossible mapping fails before the port opens rather than as a confusing 400.
+- An endpoint named by a precondition must set `stale_after_ms`. Without a bound the gate
+  could never notice the state publisher had died and would authorise against the last sample
+  it ever saw, so this is a startup error rather than a warning. Streaming an unbounded
+  endpoint over SSE remains fine.
 - State preconditions. A refusal is HTTP 200 with `PRECONDITION_FAILED` and is audited as a
   denial with its reason. Refused rather than waved through: an unlisted parameter value, a
   state endpoint that has received nothing yet, and a sample older than its own

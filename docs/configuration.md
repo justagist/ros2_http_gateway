@@ -176,9 +176,13 @@ log with its reason.
           "*": [IDLE]                     # any other command, only while IDLE
 ```
 
+- Several preconditions on one endpoint are combined with AND: all must pass, and the first to
+  refuse is the one reported.
 - A refusal is HTTP 200 with `PRECONDITION_FAILED`, audited as a denial with its reason.
-- `state_endpoint` must name a configured topic `GET` endpoint. Anything else has no
-  cached sample to read.
+- `state_endpoint` must name a configured topic `GET` endpoint, and that endpoint **must set
+  `stale_after_ms`**. Without a bound the gate could never notice the state publisher had
+  died, and would authorise against the last sample it ever saw; this is a startup error
+  naming both endpoints. The requirement applies only to gating, not to `sse.include`.
 - `field` is checked against the real message definition at startup. A field that does not
   exist, a dotted path through a scalar, or a field that is not a string or integer (and so
   cannot be compared with the strings in `allow`) all fail before the port opens.
