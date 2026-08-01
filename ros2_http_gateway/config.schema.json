@@ -152,6 +152,10 @@
           "$ref": "#/$defs/interfaceType"
         },
         "method": { "enum": ["GET", "POST"] },
+        "qos": {
+          "description": "QoS preset for a topic endpoint. `default` is reliable with depth 10; `sensor_data` is best-effort with depth 5 and is what a sensor publisher usually offers. A reliable subscription never matches a best-effort publisher.",
+          "enum": ["default", "sensor_data"]
+        },
         "roles": { "$ref": "#/$defs/roles" },
         "stale_after_ms": { "$ref": "#/$defs/staleAfterMs" },
         "timeout_ms": { "$ref": "#/$defs/timeoutMs" },

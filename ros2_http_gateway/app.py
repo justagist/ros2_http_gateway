@@ -152,9 +152,10 @@ def _guard(
 ) -> Handler:
     """Wrap a handler with authentication, the role check, timing and audit.
 
-    One audit record per request that reaches a configured route, denials included. A
-    request that matches no route is Starlette's 404 and is not audited: there is no
-    endpoint policy to have made a decision about.
+    One audit record per request that reaches a configured route: allowed, denied, or failed
+    inside the handler. A request that matches no route is Starlette's 404 and is not audited,
+    which is a deliberate gap recorded in docs/security.md -- path-scanning probes therefore
+    leave no trace in the audit file.
     """
     required = endpoint.config.roles
 
@@ -184,7 +185,15 @@ def _guard(
                     ),
                 )
             else:
-                response = await handler(request)
+                try:
+                    response = await handler(request)
+                except Exception:
+                    # The 500 path is the one an incident review most wants to see, and
+                    # letting the exception reach Starlette's error machinery would leave no
+                    # record at all. Logged with its traceback, audited, and answered with the
+                    # same envelope as everything else rather than an HTML error page.
+                    _LOG.exception("handler for %s failed", request.url.path)
+                    response = _error(500, "INTERNAL", "the gateway failed to handle this request")
 
         audit.record(
             method=request.method,

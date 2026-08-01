@@ -293,6 +293,59 @@ async def test_a_bad_body_is_audited_as_allowed_but_failed(gateway: Harness) -> 
 
 
 # --------------------------------------------------------------------------------------
+# a handler that blows up
+# --------------------------------------------------------------------------------------
+
+
+async def test_a_failing_handler_is_still_audited(
+    gateway: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 500 path is the one an incident review most wants, so it cannot be the silent one.
+
+    Today's handlers are hard to make raise, which is exactly why this is pinned now rather
+    than after phase 3 and 4 handlers grow teeth.
+    """
+    from ros2_http_gateway.cache import TopicCache
+
+    def explode(self: TopicCache, now_monotonic: float | None = None) -> bytes:
+        raise RuntimeError("simulated handler failure")
+
+    monkeypatch.setattr(TopicCache, "response_body", explode)
+
+    response = await gateway.get("/mission/status")
+    assert response.status_code == 500
+    assert response.json() == {
+        "success": False,
+        "error_code": "INTERNAL",
+        "message": "the gateway failed to handle this request",
+    }
+
+    await _settle(gateway)
+    (entry,) = gateway.audit()
+    assert entry["status"] == 500
+    assert entry["outcome"] == "INTERNAL"
+    assert entry["decision"] == "allow", "policy did allow it; the handler is what failed"
+    assert entry["user"] == "operator-user"
+
+
+async def test_a_query_string_never_reaches_the_audit_record(gateway: Harness) -> None:
+    """Guards phase 5: the SSE route will accept ?access_token=, and it must not be logged.
+
+    The record carries request.url.path deliberately, not the full URL. If that ever changes,
+    the credential lands in the audit file in plain text.
+    """
+    await gateway.client.get(
+        f"{BASE}/mission/status?access_token=super-secret&other=1",
+        headers=_headers(OPERATOR_TOKEN),
+    )
+    await _settle(gateway)
+    (entry,) = gateway.audit()
+    assert entry["path"] == "/api/v1/mission/status"
+    assert "?" not in entry["path"]
+    assert "super-secret" not in orjson.dumps(entry).decode()
+
+
+# --------------------------------------------------------------------------------------
 # not yet implemented kinds
 # --------------------------------------------------------------------------------------
 

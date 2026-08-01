@@ -53,6 +53,7 @@ _BUILT_IN_ROUTES: Final = (
 
 Kind = Literal["topic", "service", "action"]
 Method = Literal["GET", "POST"]
+QosPreset = Literal["default", "sensor_data"]
 Overflow = Literal["drop_oldest", "disconnect"]
 Executor = Literal["auto", "events", "multithreaded"]
 AuditSink = Literal["stderr", "file"]
@@ -119,6 +120,7 @@ class EndpointConfig:
     roles: frozenset[str]
     type_name: str | None
     path_params: tuple[str, ...]
+    qos: QosPreset = "default"
     stale_after_ms: int | None = None
     timeout_ms: int = DEFAULT_TIMEOUT_MS
     request_map: Mapping[str, str] = field(default_factory=dict)
@@ -342,6 +344,7 @@ class _Builder:
             roles=roles,
             type_name=raw.get("type"),
             path_params=params,
+            qos=self._qos(where, kind, raw),
             stale_after_ms=stale,
             timeout_ms=timeout,
             request_map=request_map,
@@ -358,6 +361,16 @@ class _Builder:
                 f"a {kind} endpoint is always POST; remove `method: {given}`",
             )
         return "POST"
+
+    def _qos(self, where: str, kind: Kind, raw: Mapping[str, Any]) -> QosPreset:
+        given = raw.get("qos")
+        if given is None:
+            return "default"
+        if kind != "topic":
+            self.fail(where, f"qos only applies to a topic endpoint, not a {kind} one")
+            return "default"
+        preset: QosPreset = given
+        return preset
 
     def _roles(
         self, where: str, raw: Mapping[str, Any], defaults: Mapping[str, Any]

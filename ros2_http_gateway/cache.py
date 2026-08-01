@@ -12,6 +12,17 @@ published at 1 kHz and read once a second is therefore deserialised once a secon
 The response envelope is assembled by concatenating bytes around the memoised payload
 rather than by re-encoding a dict, because ``stale`` depends on when the request arrived
 while the payload does not.
+
+**Deserialising and encoding run on the event loop, by design.** Control-plane payloads are
+small enough that dispatching them to a thread pool would cost more than the encode, and the
+memoisation is free of races *because* it is loop-confined: the check and the store in
+:meth:`TopicCache.encoded_data` have no await between them, so no second reader can
+interleave. That invariant is load-bearing. Nothing off the loop may call
+:meth:`encoded_data` or :meth:`response_body`; the ROS side calls :meth:`offer` and nothing
+else.
+
+Staleness is measured on the monotonic clock, not the wall clock the envelope reports. An
+NTP step would otherwise make fresh data look stale, or worse, stale data look fresh.
 """
 
 from __future__ import annotations
@@ -34,11 +45,17 @@ EMPTY_BODY: Final = b'{"data":null,"stamp":null,"seq":0,"stale":true}'
 
 
 class Sample(NamedTuple):
-    """One received message, still in its wire form."""
+    """One received message, still in its wire form.
+
+    Two clocks on purpose: ``stamp`` is what the response reports, and ``monotonic`` is what
+    staleness is judged against, so that resetting the system clock cannot make a fresh
+    sample look stale or a stale one fresh.
+    """
 
     raw: bytes
     seq: int
     stamp: float
+    monotonic: float
 
 
 class TopicCache:
@@ -88,7 +105,7 @@ class TopicCache:
             raw: The serialised CDR message as handed over by ``raw=True``.
         """
         self._seq += 1
-        self._sample = Sample(raw, self._seq, time.time())
+        self._sample = Sample(raw, self._seq, time.time(), time.monotonic())
 
     # ------------------------------------------------------------- asyncio side
 
@@ -99,11 +116,21 @@ class TopicCache:
 
     @property
     def seq(self) -> int:
-        """How many messages have been received on this topic."""
-        return self._seq
+        """The sequence number of the newest sample, or 0 before the first one.
+
+        Read from the sample rather than from the counter so that it can never run ahead of
+        :attr:`latest`. :meth:`offer` increments the counter and then stores the sample, and a
+        reader landing between the two would otherwise see a sequence number belonging to a
+        message it cannot yet get at -- exactly the kind of thing a stream broadcaster would
+        key off and then skip.
+        """
+        sample = self._sample
+        return sample.seq if sample is not None else 0
 
     def encoded_data(self, sample: Sample) -> bytes:
         """Return the JSON encoding of ``sample``, deserialising at most once per sample.
+
+        Must be called from the event loop thread; see the module docstring.
 
         Args:
             sample: The sample to encode, as returned by :attr:`latest`.
@@ -122,15 +149,25 @@ class TopicCache:
         self._encoded_seq = sample.seq
         return encoded
 
-    def is_stale(self, sample: Sample, now: float) -> bool:
-        """Whether ``sample`` is older than the configured staleness threshold."""
-        return self._stale_after_s is not None and (now - sample.stamp) > self._stale_after_s
-
-    def response_body(self, now: float | None = None) -> bytes:
-        """Build the full JSON body for a read of this endpoint.
+    def is_stale(self, sample: Sample, now_monotonic: float) -> bool:
+        """Whether ``sample`` is older than the configured staleness threshold.
 
         Args:
-            now: Wall-clock time to judge staleness against. Defaults to the current time.
+            sample: The sample to judge.
+            now_monotonic: A :func:`time.monotonic` reading, not a wall-clock one.
+        """
+        return (
+            self._stale_after_s is not None
+            and (now_monotonic - sample.monotonic) > self._stale_after_s
+        )
+
+    def response_body(self, now_monotonic: float | None = None) -> bytes:
+        """Build the full JSON body for a read of this endpoint.
+
+        Must be called from the event loop thread; see the module docstring.
+
+        Args:
+            now_monotonic: Monotonic time to judge staleness against. Defaults to now.
 
         Returns:
             The encoded response body.
@@ -140,7 +177,8 @@ class TopicCache:
             return EMPTY_BODY
 
         payload = self.encoded_data(sample)
-        stale = self.is_stale(sample, time.time() if now is None else now)
+        now = time.monotonic() if now_monotonic is None else now_monotonic
+        stale = self.is_stale(sample, now)
         return b"".join(
             (
                 b'{"data":',

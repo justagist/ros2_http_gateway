@@ -73,6 +73,7 @@ endpoints:
 | `topic` / `service` / `action` | | | Exactly one. Absolute or root-relative ROS name; `~` is not accepted |
 | `type` | all | resolved from the graph | `<pkg>/msg\|srv\|action/<Name>`, and the middle segment must match the kind |
 | `method` | topic | `GET` | `POST` on a topic publishes. Services and actions are always `POST` |
+| `qos` | topic | `default` | `default` is reliable, depth 10. `sensor_data` is best-effort, depth 5 |
 | `roles` | all | from `defaults` | At least one role, here or in `defaults`, or the endpoint is unreachable |
 | `stale_after_ms` | topic `GET` | never stale | Past this age a read returns `"stale": true` |
 | `timeout_ms` | service, action | `5000` | |
@@ -107,6 +108,26 @@ A type string can be syntactically valid, importable, and still not be the one t
 is publishing. The hermetic check cannot catch that; run `--online` on the machine as a
 deploy-time smoke test. It only applies to `--check`, since serving always uses the live
 graph.
+
+### Choosing `qos`
+
+A **reliable** subscription does not match a **best-effort** publisher. That is the single
+most likely reason a correctly-named topic endpoint stays empty forever, because nearly every
+sensor publishes best-effort:
+
+```yaml
+  /camera/info:
+    topic: /camera/camera_info
+    qos: sensor_data          # matches a sensor publisher
+    roles: [viewer]
+```
+
+If a subscription finds no publisher within a few seconds of startup, the gateway logs a
+warning naming the topic and this setting, rather than leaving you with an endpoint that
+answers `"stale": true` forever and no clue why.
+
+Only these two presets are offered, and they are the two that matter. If you need a specific
+depth, durability or deadline, say so on the issue tracker with the case.
 
 ## `defaults`
 

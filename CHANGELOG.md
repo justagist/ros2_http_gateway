@@ -25,6 +25,13 @@ All notable changes to this project are documented here. Format follows
   back to `MultiThreadedExecutor`; `events` on a distro without it is a startup error.
 - Service and action endpoints are routed and enforce auth, but answer 501 naming the phase
   that will serve them, rather than 404 which reads like a config mistake.
+- Per-endpoint `qos: default | sensor_data`. A reliable subscription never matches a
+  best-effort publisher, which is how most sensors publish, so without this an endpoint
+  pointed at a camera would stay empty forever. The chosen preset is logged, and a
+  subscription that finds no publisher within a few seconds now produces a warning naming
+  the topic and this setting instead of failing silently.
+- `docs/security.md`: the security model, including the deliberate gap that unmatched routes
+  leave no audit record, so path-scanning probes are invisible to the audit file.
 
 - Config engine: YAML, JSON Schema validation against the bundled `config.schema.json`,
   defaults merging, and a frozen typed model. Every problem in a file is reported at once,
@@ -93,6 +100,13 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- A handler that raises is now audited (status 500, `outcome: INTERNAL`) and answered with the
+  standard error envelope. It previously escaped to Starlette's error machinery, leaving no
+  record of exactly the request an incident review would care about.
+- Staleness is measured on the monotonic clock. It used the same wall-clock reading the
+  response reports, so an NTP step could make fresh data look stale or stale data look fresh.
+- `TopicCache.seq` is read from the newest sample rather than from the counter, so it can no
+  longer briefly report a sequence number whose sample is not yet reachable.
 - `datetime.UTC` in the audit timestamp broke Python 3.10, which is what Humble ships; now
   `timezone.utc`. mypy is configured to target the 3.10 floor again (with numpy's PEP 695
   stubs shadowed by a local shim) so this class of mistake is a type error rather than an

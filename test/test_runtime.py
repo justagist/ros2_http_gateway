@@ -151,6 +151,85 @@ def test_caches_exist_only_for_topic_reads(runtime: RosRuntime) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# QoS
+# --------------------------------------------------------------------------------------
+
+
+def test_qos_presets_map_to_the_rclpy_profiles() -> None:
+    """A reliable subscription never matches a best-effort publisher, hence the option."""
+    from rclpy.qos import QoSReliabilityPolicy
+
+    from ros2_http_gateway.runtime import qos_profile
+
+    assert qos_profile("default").reliability == QoSReliabilityPolicy.RELIABLE
+    assert qos_profile("sensor_data").reliability == QoSReliabilityPolicy.BEST_EFFORT
+
+
+def test_a_sensor_data_endpoint_receives_from_a_best_effort_publisher(tmp_path: Path) -> None:
+    """The failure this option exists to prevent, exercised end to end."""
+    import rclpy
+    from example_interfaces.msg import String
+    from rclpy.qos import qos_profile_sensor_data
+
+    endpoints = {
+        "/sensor": {
+            "topic": "/gateway_qos_sensor",
+            "type": "example_interfaces/msg/String",
+            "roles": ["viewer"],
+            "qos": "sensor_data",
+        }
+    }
+    runtime = RosRuntime(resolved_config(tmp_path, endpoints=endpoints))
+    runtime.start()
+
+    context = rclpy.context.Context()
+    context.init()
+    publisher_node = rclpy.create_node("qos_best_effort_talker", context=context)
+    publisher = publisher_node.create_publisher(
+        String, "/gateway_qos_sensor", qos_profile_sensor_data
+    )
+    try:
+        cache = runtime.caches["/sensor"]
+        message = String()
+        message.data = "sensor"
+        deadline = time.monotonic() + 15
+        while cache.latest is None and time.monotonic() < deadline:
+            publisher.publish(message)
+            time.sleep(0.02)
+        assert cache.latest is not None, "a best-effort publisher did not reach the endpoint"
+    finally:
+        publisher_node.destroy_node()
+        context.try_shutdown()
+        runtime.stop()
+
+
+def test_an_unmatched_subscription_is_warned_about(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty cache is otherwise silent: no publisher, no message, no explanation."""
+    import ros2_http_gateway.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "_MATCH_WARN_AFTER_S", 0.2)
+    endpoints = {
+        "/nobody": {
+            "topic": "/gateway_topic_with_no_publisher",
+            "type": "example_interfaces/msg/String",
+            "roles": ["viewer"],
+        }
+    }
+    runtime = RosRuntime(resolved_config(tmp_path, endpoints=endpoints))
+    with caplog.at_level("WARNING"):
+        runtime.start()
+        deadline = time.monotonic() + 10
+        while "nothing is publishing" not in caplog.text and time.monotonic() < deadline:
+            time.sleep(0.05)
+        runtime.stop()
+
+    assert "nothing is publishing /gateway_topic_with_no_publisher" in caplog.text
+    assert "qos: sensor_data" in caplog.text, "the warning should name the likely cause"
+
+
+# --------------------------------------------------------------------------------------
 # data flow
 # --------------------------------------------------------------------------------------
 

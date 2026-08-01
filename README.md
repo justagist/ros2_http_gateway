@@ -12,7 +12,8 @@ logging, server-sent events and an auto-generated OpenAPI 3.1 document.
 > sample, `POST` publishes, with bearer auth, role checks and audit logging. Service and
 > action endpoints are configured and routed but answer 501 until the next phases. See
 > [CHANGELOG.md](CHANGELOG.md) for what is real, [docs/configuration.md](docs/configuration.md)
-> for the config format and [docs/protocol.md](docs/protocol.md) for the wire protocol.
+> for the config format, [docs/protocol.md](docs/protocol.md) for the wire protocol and
+> [docs/security.md](docs/security.md) for the security model and its known gaps.
 
 ## Why not rosbridge
 

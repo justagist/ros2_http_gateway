@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from .cache import TopicCache
-from .config import ConfigError, Executor
+from .config import ConfigError, Executor, QosPreset
 from .resolve import ResolvedConfig
 
 _LOG = logging.getLogger(__name__)
@@ -35,6 +35,9 @@ _NODE_NAME: Final = "ros2_http_gateway"
 _QUEUE_TIMEOUT_S: Final = 0.1
 _PUBLISH_QUEUE_SIZE: Final = 1024
 _SHUTDOWN_JOIN_S: Final = 5.0
+# How long to give discovery before complaining that a subscription found nobody. Long
+# enough not to cry wolf while a system is still coming up.
+_MATCH_WARN_AFTER_S: Final = 8.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +46,26 @@ class _Outgoing:
 
     publisher: Any
     message: Any
+
+
+def qos_profile(preset: QosPreset) -> Any:
+    """Map a config QoS preset onto an rclpy profile.
+
+    Reliability is the reason this option exists: a RELIABLE subscription simply does not
+    match a BEST_EFFORT publisher, which is how nearly every sensor publishes. Without a way
+    to say ``sensor_data``, pointing an endpoint at a camera would give an endlessly empty
+    cache with nothing anywhere explaining why.
+
+    Args:
+        preset: ``default`` or ``sensor_data``.
+
+    Returns:
+        The rclpy QoS profile to subscribe or publish with.
+    """
+    from rclpy.qos import QoSPresetProfiles
+
+    chosen = QoSPresetProfiles.SENSOR_DATA if preset == "sensor_data" else QoSPresetProfiles.DEFAULT
+    return chosen.value
 
 
 def make_executor(kind: Executor, context: Any) -> tuple[Any, str]:
@@ -87,11 +110,13 @@ class RosRuntime:
         "_context",
         "_executor",
         "_executor_name",
+        "_match_thread",
         "_node",
         "_outbox",
         "_publishers",
         "_spin_thread",
         "_stopping",
+        "_subscribed",
         "_worker_thread",
         "caches",
         "resolved",
@@ -101,12 +126,14 @@ class RosRuntime:
         self.resolved = resolved
         self.caches: dict[str, TopicCache] = {}
         self._publishers: dict[str, Any] = {}
+        self._subscribed: dict[str, str] = {}
         self._context: Any = None
         self._node: Any = None
         self._executor: Any = None
         self._executor_name = ""
         self._spin_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
+        self._match_thread: threading.Thread | None = None
         self._outbox: queue.Queue[_Outgoing | None] = queue.Queue(maxsize=_PUBLISH_QUEUE_SIZE)
         self._stopping = threading.Event()
 
@@ -148,16 +175,29 @@ class RosRuntime:
                     endpoint.message_type,
                     endpoint.ros_name,
                     cache.offer,
-                    10,
+                    qos_profile(endpoint.config.qos),
                     raw=True,
                     callback_group=MutuallyExclusiveCallbackGroup(),
                 )
-                _LOG.info("subscribed %s -> %s [%s]", endpoint.ros_name, path, endpoint.type_name)
+                self._subscribed[path] = endpoint.ros_name
+                _LOG.info(
+                    "subscribed %s -> %s [%s] qos=%s",
+                    endpoint.ros_name,
+                    path,
+                    endpoint.type_name,
+                    endpoint.config.qos,
+                )
             elif endpoint.config.is_topic_write:
                 self._publishers[path] = self._node.create_publisher(
-                    endpoint.message_type, endpoint.ros_name, 10
+                    endpoint.message_type, endpoint.ros_name, qos_profile(endpoint.config.qos)
                 )
-                _LOG.info("publisher %s <- %s [%s]", endpoint.ros_name, path, endpoint.type_name)
+                _LOG.info(
+                    "publisher %s <- %s [%s] qos=%s",
+                    endpoint.ros_name,
+                    path,
+                    endpoint.type_name,
+                    endpoint.config.qos,
+                )
 
         try:
             self._executor, self._executor_name = make_executor(
@@ -183,6 +223,11 @@ class RosRuntime:
             target=self._publish_worker, name="ros-publisher", daemon=True
         )
         self._worker_thread.start()
+        if self._subscribed:
+            self._match_thread = threading.Thread(
+                target=self._warn_about_unmatched, name="ros-match-check", daemon=True
+            )
+            self._match_thread.start()
 
     def publish(self, path: str, message: Any) -> bool:
         """Hand a message to the ROS side for publishing. Returns immediately.
@@ -206,6 +251,11 @@ class RosRuntime:
         if self._stopping.is_set():
             return
         self._stopping.set()
+
+        if self._match_thread is not None:
+            # It waits on the stop event, so setting it above already released the thread.
+            self._match_thread.join(timeout=_SHUTDOWN_JOIN_S)
+            self._match_thread = None
 
         if self._worker_thread is not None:
             self._outbox.put(None)
@@ -240,6 +290,32 @@ class RosRuntime:
             # raise out of spin() is just the executor noticing it was torn down.
             if not self._stopping.is_set():
                 _LOG.exception("the ROS executor stopped unexpectedly")
+
+    def _warn_about_unmatched(self) -> None:
+        """Say something once if a subscription has found no publisher.
+
+        An unmatched subscription is silent by nature: the cache stays empty, every read
+        answers ``"stale": true``, and nothing anywhere says why. The usual causes are a
+        misspelled topic name and a QoS mismatch, so both get named.
+
+        Waits on the stop event rather than sleeping, so shutting down does not have to wait
+        for the delay to elapse.
+        """
+        if self._stopping.wait(timeout=_MATCH_WARN_AFTER_S):
+            return
+        node = self._node
+        if node is None:  # pragma: no cover - stop() raced with the delay
+            return
+        for path, topic in self._subscribed.items():
+            if node.count_publishers(topic) == 0:
+                _LOG.warning(
+                    "%s: nothing is publishing %s after %.0fs, so reads will stay stale. "
+                    "Check the topic name, and whether the publisher offers best-effort QoS "
+                    "(set `qos: sensor_data` on this endpoint if so).",
+                    path,
+                    topic,
+                    _MATCH_WARN_AFTER_S,
+                )
 
     def _publish_worker(self) -> None:
         """Drain the outbox onto ROS publishers.
