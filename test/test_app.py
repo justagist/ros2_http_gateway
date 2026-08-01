@@ -179,15 +179,18 @@ async def test_read_returns_fresh_data_then_goes_stale(gateway: Harness, talker:
     """The acceptance criterion: fresh while publishing, stale once it stops."""
     cache = gateway.runtime.caches["/mission/status"]
     assert talker.publish_until("RUNNING", lambda: cache.latest is not None)
+    # Let the in-flight publishes land before reading: otherwise the sample can change between
+    # the two GETs and the "did not change" assertion below is a race.
+    settled = talker.wait_until_quiet(cache)
 
     fresh = (await gateway.get("/mission/status")).json()
     assert fresh["data"] == {"data": "RUNNING"}
     assert fresh["stale"] is False
-    assert fresh["seq"] >= 1
+    assert fresh["seq"] == settled
     assert fresh["stamp"] > 0
 
-    # stale_after_ms is 300 for this endpoint and the publisher has stopped.
-    time.sleep(0.5)
+    # stale_after_ms is 1000 for this endpoint and the publisher has stopped.
+    time.sleep(1.2)
     stale = (await gateway.get("/mission/status")).json()
     assert stale["stale"] is True
     assert stale["seq"] == fresh["seq"], "no new message, so the sample must not change"

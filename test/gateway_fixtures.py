@@ -81,7 +81,10 @@ def config_document(**overrides: Any) -> dict[str, Any]:
                 "topic": STATE_TOPIC,
                 "type": "example_interfaces/msg/String",
                 "roles": ["viewer", "operator"],
-                "stale_after_ms": 300,
+                # Comfortably longer than wait_until_quiet's settle window, so that waiting
+                # for the publisher to go quiet does not itself age the sample past the
+                # threshold before the "fresh" reading is taken.
+                "stale_after_ms": 1000,
             },
             "/never/stales": {
                 "topic": STATE_TOPIC,
@@ -176,6 +179,34 @@ class Talker:
                 return True
             time.sleep(0.02)
         return False
+
+    def wait_until_quiet(self, cache: Any, settle_s: float = 0.3, timeout: float = 10.0) -> int:
+        """Wait until no new sample has arrived for ``settle_s``, and return the final seq.
+
+        :meth:`publish_until` stops as soon as the first sample lands, but the publishes it
+        already made are still in flight. A test that then asserts "the sample did not change"
+        is racing them, which is how test_read_returns_fresh_data_then_goes_stale failed on two
+        CI legs while passing everywhere else.
+
+        Args:
+            cache: The topic cache to watch.
+            settle_s: How long the sequence number must hold still.
+            timeout: Give up after this long and return whatever it has reached.
+
+        Returns:
+            The sequence number once it has stopped moving.
+        """
+        deadline = time.monotonic() + timeout
+        last = cache.seq
+        quiet_since = time.monotonic()
+        while time.monotonic() < deadline:
+            time.sleep(0.02)
+            if cache.seq != last:
+                last = cache.seq
+                quiet_since = time.monotonic()
+            elif time.monotonic() - quiet_since >= settle_s:
+                return int(last)
+        return int(last)
 
     def wait_for_command(self, timeout: float = 10.0) -> list[str]:
         deadline = time.monotonic() + timeout

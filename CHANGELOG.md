@@ -132,6 +132,10 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- A racing staleness test: it read the cache while publishes were still in flight, so the
+  sample could change under an assertion that it would not. Tests now wait for the publisher
+  to go quiet first.
+
 - The test suite no longer assumes every distro has an events executor, and now honours the
   `GATEWAY_TEST_EXECUTOR` the CI matrix has been setting since the start but nothing read, so
   each distro job exercises the executor it was asked for instead of both twice.
