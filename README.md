@@ -63,8 +63,9 @@ ros2-http-gateway examples/dev.yaml           # serve on http://127.0.0.1:8080/a
 `--check` resolves every interface type, compiles every converter and checks every
 precondition field against the real message definition, then prints one line per endpoint.
 It needs no running system when the config pins its types, which is what makes it usable
-as a CI gate. Full format documented in
-[docs/configuration.md](docs/configuration.md).
+as a CI gate; add `--online` on the robot to also verify those pinned types against the
+live graph. Full format in [docs/configuration.md](docs/configuration.md), wire protocol in
+[docs/protocol.md](docs/protocol.md).
 
 ```bash
 curl -H 'Authorization: Bearer dev-token-change-me' \
@@ -101,7 +102,17 @@ lookups and precompiled code only.
 - `uint8[]` and `byte[]` fields become base64 strings.
 - `int64`/`uint64` become JSON strings by default (`int64_as_string`), because values
   above 2^53 do not survive a JavaScript `number`.
-- Numeric arrays are serialised straight from numpy, without an intermediate list.
+- Numeric arrays are serialised straight from numpy, without an intermediate list. Numeric
+  sequences, which rclpy hands over as `array.array`, become a zero-copy numpy view of the
+  same buffer once they are long enough for that to pay (measured crossover: 64 elements).
+
+## Status codes
+
+4xx means the request never reached ROS: 401/403 auth, 400 malformed body or a value out of
+range, 404 unknown route or goal. 200 means it did reach ROS and the body carries the
+outcome, success or not (`TIMEOUT`, `SERVICE_UNAVAILABLE`, `PRECONDITION_FAILED`,
+`GOAL_REJECTED`). Both use the same error envelope. See
+[docs/protocol.md](docs/protocol.md).
 
 ## Non-goals for v1
 

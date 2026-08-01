@@ -55,3 +55,16 @@ def test_importing_the_package_does_not_import_rclpy() -> None:
         "assert 'rclpy' not in sys.modules, sorted(m for m in sys.modules if 'rclpy' in m)"
     )
     subprocess.run([sys.executable, "-c", probe], check=True)
+
+
+def test_online_without_check_is_a_usage_error() -> None:
+    """Serving always uses the live graph, so the flag would be meaningless there."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--online", "examples/dev.yaml"])
+    assert exc.value.code == 2
+
+
+def test_online_is_documented_in_help(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert "--online" in capsys.readouterr().out

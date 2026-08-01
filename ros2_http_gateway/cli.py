@@ -22,8 +22,11 @@ _LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 
 _EPILOG = """\
 examples:
-  ros2-http-gateway config.yaml                 serve the gateway
-  ros2-http-gateway --check config.yaml         validate config and exit (CI friendly)
+  ros2-http-gateway config.yaml                  serve the gateway
+  ros2-http-gateway --check config.yaml          validate and exit; no ROS graph needed
+                                                 when every endpoint pins its `type:`
+  ros2-http-gateway --check --online config.yaml also check pinned types against the
+                                                 live graph, on the robot
 """
 
 
@@ -45,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="validate the config, including graph type resolution, then exit 0/1",
+    )
+    parser.add_argument(
+        "--online",
+        action="store_true",
+        help="with --check, also verify pinned `type:` values against the live ROS graph "
+        "(a deploy-time smoke test; the default check is hermetic)",
     )
     parser.add_argument(
         "--discovery-timeout",
@@ -78,6 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.config is None:
         parser.error("a config file is required")
+    if args.online and not args.check:
+        parser.error("--online only applies to --check; serving always uses the live graph")
 
     try:
         require_rclpy()
@@ -91,13 +102,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = load_config(args.config)
-        resolved = resolve(config, discovery_timeout=args.discovery_timeout)
+        resolved = resolve(
+            config,
+            discovery_timeout=args.discovery_timeout,
+            verify_online=args.online,
+        )
     except ConfigError as exc:
         print(f"error: {exc.format()}", file=sys.stderr)
         return 1
 
     if args.check:
-        _report_check(resolved)
+        _report_check(resolved, online=args.online)
         return 0
 
     # The serve path lands in phase 2.
@@ -108,10 +123,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 1
 
 
-def _report_check(resolved: ResolvedConfig) -> None:
+def _report_check(resolved: ResolvedConfig, *, online: bool = False) -> None:
     """Print a one-line-per-endpoint summary of a successful validation."""
     config = resolved.config
-    print(f"{config.source}: ok")
+    print(f"{config.source}: ok{' (verified against the live graph)' if online else ''}")
     for path in sorted(resolved.endpoints):
         endpoint = resolved.endpoints[path]
         roles = ",".join(sorted(endpoint.config.roles))

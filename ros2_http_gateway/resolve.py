@@ -5,9 +5,11 @@ every interface type is loaded, every converter is compiled, and every dotted pr
 field has been checked against a real message definition. Nothing about the shape of the
 data is discovered after the port opens.
 
-Needs a sourced ROS 2 environment. The ROS graph is only queried when at least one
-endpoint omits ``type:``, which is what lets ``--check`` run hermetically in CI against a
-config that pins its types.
+Needs a sourced ROS 2 environment. By default the ROS graph is only queried for endpoints
+that omit ``type:``, which is what lets ``--check`` run hermetically in CI against a config
+that pins its types. Pass ``verify_online=True`` (``--check --online``) to also check the
+pinned ones against the live graph: a type string can be syntactically valid, importable
+and still not be what the robot is actually publishing.
 """
 
 from __future__ import annotations
@@ -88,26 +90,31 @@ def resolve(
     *,
     discovery_timeout: float = 5.0,
     node: Any | None = None,
+    verify_online: bool = False,
 ) -> ResolvedConfig:
     """Resolve interface types and compile every converter.
 
     Args:
         config: A validated configuration.
         discovery_timeout: Seconds to wait for the ROS graph while resolving omitted
-            types. Ignored when every endpoint pins its ``type:``.
+            types. Ignored when every endpoint pins its ``type:`` and ``verify_online`` is
+            not set.
         node: An existing rclpy node to query the graph with. When None and graph access
             is needed, a short-lived context and node are created and torn down.
+        verify_online: Also check pinned ``type:`` values against the live graph, and
+            report an endpoint whose ROS name is absent from it. Turns a hermetic check
+            into a deploy-time smoke test on the real robot.
 
     Returns:
         The resolved configuration.
 
     Raises:
         ConfigError: If any type is unresolvable, ambiguous, mismatched with its endpoint
-            kind, or if a precondition names a field that does not exist. Every problem is
-            reported at once.
+            kind, contradicts the live graph under ``verify_online``, or if a precondition
+            names a field that does not exist. Every problem is reported at once.
     """
     problems: list[str] = []
-    discovered = _discover_types(config, discovery_timeout, node, problems)
+    discovered = _discover_types(config, discovery_timeout, node, problems, verify_online)
 
     endpoints: dict[str, ResolvedEndpoint] = {}
     for path, endpoint in config.endpoints.items():
@@ -118,6 +125,8 @@ def resolve(
         if resolved is not None:
             endpoints[path] = resolved
 
+    if verify_online:
+        _verify_pinned_types(config, discovered, problems)
     _check_precondition_fields(config, endpoints, problems)
 
     if problems:
@@ -125,14 +134,41 @@ def resolve(
     return ResolvedConfig(config=config, endpoints=endpoints)
 
 
+def _verify_pinned_types(
+    config: GatewayConfig, observed: Mapping[str, str], problems: list[str]
+) -> None:
+    """Compare each pinned ``type:`` with what the graph actually advertises."""
+    for path, endpoint in config.endpoints.items():
+        if endpoint.type_name is None:
+            continue
+        actual = observed.get(path)
+        if actual is None:
+            # _poll_graph already reported absence and ambiguity for this endpoint.
+            continue
+        if actual != endpoint.type_name:
+            problems.append(
+                f"endpoints.{path}: configured as {endpoint.type_name}, but "
+                f"{_absolute(endpoint.ros_name)} on the graph is {actual}"
+            )
+
+
 def _discover_types(
     config: GatewayConfig,
     discovery_timeout: float,
     node: Any | None,
     problems: list[str],
+    verify_online: bool = False,
 ) -> dict[str, str]:
-    """Resolve omitted types from the graph, returning HTTP path -> type name."""
-    pending = config.endpoints_needing_type_resolution()
+    """Resolve types from the graph, returning HTTP path -> observed type name.
+
+    Only endpoints that omit ``type:`` are looked up unless ``verify_online`` is set, in
+    which case every endpoint is, so pinned types can be compared with reality.
+    """
+    pending = (
+        tuple(config.endpoints.values())
+        if verify_online
+        else config.endpoints_needing_type_resolution()
+    )
     if not pending:
         return {}
 
@@ -170,7 +206,7 @@ def _poll_graph(
     }
     wanted = {endpoint.path: _absolute(endpoint.ros_name) for endpoint in pending}
     _LOG.info(
-        "resolving %d interface type(s) from the ROS graph (timeout %.1fs): %s",
+        "querying the ROS graph for %d name(s) (timeout %.1fs): %s",
         len(wanted),
         discovery_timeout,
         ", ".join(sorted(wanted.values())),
@@ -195,10 +231,15 @@ def _poll_graph(
         name = wanted[endpoint.path]
         where = f"endpoints.{endpoint.path}"
         if not candidates:
+            hint = (
+                "Raise --discovery-timeout, or start the other end first."
+                if endpoint.type_name
+                else "Add an explicit `type:` here, raise --discovery-timeout, or start "
+                "the other end first."
+            )
             problems.append(
                 f"{where}: {endpoint.kind} {name} was not on the ROS graph after "
-                f"{discovery_timeout:.1f}s. Add an explicit `type:` here, raise "
-                "--discovery-timeout, or start the other end first."
+                f"{discovery_timeout:.1f}s. {hint}"
             )
         elif len(candidates) > 1:
             problems.append(
@@ -207,7 +248,8 @@ def _poll_graph(
             )
         else:
             resolved[endpoint.path] = candidates[0]
-            _LOG.info("%s: resolved %s to %s", where, name, candidates[0])
+            if endpoint.type_name is None:
+                _LOG.info("%s: resolved %s to %s", where, name, candidates[0])
     return resolved
 
 

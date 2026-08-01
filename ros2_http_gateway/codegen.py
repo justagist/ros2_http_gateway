@@ -18,8 +18,15 @@ What the JSON encoding looks like, and why:
   because values above 2^53 do not survive a JavaScript ``number``. Collections of them
   become arrays of strings.
 * Fixed-size arrays of numerics stay as the numpy arrays rclpy hands over, for orjson's
-  ``OPT_SERIALIZE_NUMPY`` to consume without a copy. Sequences arrive as
-  ``array.array``, which orjson cannot serialise, so those get ``.tolist()``.
+  ``OPT_SERIALIZE_NUMPY`` to consume without a copy. Sequences arrive as ``array.array``,
+  which orjson cannot serialise, so they become either a list or a zero-copy numpy view of
+  the same buffer, whichever is faster at that length -- see ``_VIEW_FROM``.
+* ``float32`` sequences always take the numpy view, whatever their length, because the two
+  paths do not produce the same JSON. ``array('f').tolist()`` widens to double and prints
+  ``1.8700000047683716``, while numpy prints the shortest text that round-trips as
+  ``float32``, ``1.87``. Both read back into ``float32`` exactly, but a number whose
+  formatting depended on how many elements happened to be in the sequence would be a
+  hostile API, and fixed-size ``float32[N]`` already emits the numpy form.
 * ``float``/``double`` NaN and infinities become JSON ``null``, which is what orjson
   does; ROS has no other way to spell them in JSON.
 
@@ -70,7 +77,16 @@ MessageClass: TypeAlias = Any
 
 
 class ConversionError(ValueError):
-    """A JSON value could not be turned into the ROS field it targets."""
+    """A JSON value could not be turned into the ROS field it targets.
+
+    The message always begins with the dotted path of the offending field, as the client
+    wrote it, so it can be handed straight to a client in a BAD_REQUEST envelope. The same
+    path is available separately as :attr:`field`.
+    """
+
+    def __init__(self, message: str, *, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
 
 
 class UnsupportedFieldError(TypeError):
@@ -96,6 +112,12 @@ _NUMERIC: Final[dict[str, tuple[str, str, tuple[int, int] | None]]] = {
 _WIDE_INTS: Final = frozenset({"int64", "uint64"})
 _FLOATS: Final = frozenset({"float", "double"})
 _BYTE_LIKE: Final = frozenset({"uint8", "char"})
+
+# Length at or above which wrapping a numeric sequence's buffer in a numpy view beats
+# building a Python list. Below it the fixed cost of numpy.frombuffer (~0.45us) dominates;
+# above it the view wins and keeps winning (1.5x at 128 doubles, 3.3x at 8192 int32s).
+# Measured at 64 for float64, int64, int32 and int16 alike on CPython 3.12 + orjson 3.11.
+_VIEW_FROM: Final = 64
 
 
 def iter_fields(msg_type: MessageClass) -> Iterator[tuple[str, Any]]:
@@ -147,6 +169,7 @@ class _ToDictEmitter:
         self.lines: list[str] = []
         self._tmp = 0
         self._depth = 0
+        self._seq = 0
 
     def struct(self, msg_type: MessageClass, accessor: str) -> str:
         """Return an expression building the dict for ``msg_type`` read from ``accessor``."""
@@ -218,11 +241,24 @@ class _ToDictEmitter:
         if name == "boolean":
             return accessor
         if name in _WIDE_INTS and self.int64_as_string:
+            # Every element needs a Python-level str() anyway, so a view buys nothing.
             return f"[str(_w) for _w in {accessor}.tolist()]"
-        if name in _NUMERIC:
-            # numpy goes straight to orjson under OPT_SERIALIZE_NUMPY; array.array cannot.
-            return f"{accessor}.tolist()" if is_sequence else accessor
-        raise UnsupportedFieldError(f"no JSON encoding for basic type {name!r}")
+        if name not in _NUMERIC:
+            raise UnsupportedFieldError(f"no JSON encoding for basic type {name!r}")
+        if not is_sequence:
+            # Already a numpy array; orjson takes it as is.
+            return accessor
+
+        dtype = _NUMERIC[name][0]
+        if name == "float":
+            # Not a performance choice: see the module docstring on float32 formatting.
+            return f"_np.frombuffer({accessor}, dtype=_np.float32)"
+        self._seq += 1
+        tmp = f"_s{self._seq}"
+        return (
+            f"(_np.frombuffer({tmp}, dtype=_np.{dtype})"
+            f" if len({tmp} := {accessor}) >= {_VIEW_FROM} else {tmp}.tolist())"
+        )
 
 
 def msg_to_dict_source(msg_type: MessageClass, *, int64_as_string: bool = True) -> str:
@@ -256,7 +292,7 @@ def build_msg_to_dict(
         A single-argument callable. Its source is available as ``__ros_source__``.
     """
     source = msg_to_dict_source(msg_type, int64_as_string=int64_as_string)
-    namespace: dict[str, Any] = {"_b64": _b64}
+    namespace: dict[str, Any] = {"_b64": _b64, "_np": numpy}
     exec(compile(source, f"<to_dict {type_name_of(msg_type)}>", "exec"), namespace)
     converter: Callable[[Any], dict[str, Any]] = namespace["to_dict"]
     converter.__ros_source__ = source  # type: ignore[attr-defined]
@@ -273,13 +309,18 @@ def _b64(raw: bytes) -> str:
 
 
 class _ToMsgEmitter:
-    """Emits one builder function per message type reachable from the root.
+    """Emits one builder function per (message type, dotted path) reachable from the root.
 
     This direction delegates instead of inlining: request bodies are cold compared with
-    topic reads, one function per type keeps collection handling to a single
-    comprehension, and error messages get to name the type they came from. Every field
-    label baked into the source is a compile-time constant, so nothing is formatted on
-    the success path.
+    topic reads, and one function per type keeps collection handling to a single
+    comprehension.
+
+    Builders are keyed by dotted path as well as by type, so every error message can name
+    the field the way the client wrote it -- ``linear.x``, ``status[].values[].key`` -- while
+    keeping every label a compile-time constant, so nothing is formatted on the success
+    path. The cost is one extra function when the same type appears at two paths
+    (``Vector3`` at ``linear`` and at ``angular``), which is cheap on a cold path and pays
+    for itself the first time somebody has to debug a 400.
     """
 
     def __init__(self, *, int64_as_string: bool) -> None:
@@ -303,9 +344,17 @@ class _ToMsgEmitter:
         self._builders: dict[str, str] = {}
         self._loop_depth = 0
 
-    def builder_for(self, msg_type: MessageClass) -> str:
-        """Return the name of the builder for ``msg_type``, emitting it on first use."""
-        key = f"{msg_type.__module__}.{msg_type.__qualname__}"
+    def builder_for(self, msg_type: MessageClass, prefix: str = "") -> str:
+        """Return the builder for ``msg_type`` at dotted path ``prefix``, emitting it once.
+
+        Args:
+            msg_type: A generated ROS message class.
+            prefix: Dotted path from the request body to this message, empty at the root.
+
+        Returns:
+            The name of the generated builder function.
+        """
+        key = f"{msg_type.__module__}.{msg_type.__qualname__}@{prefix}"
         existing = self._builders.get(key)
         if existing is not None:
             return existing
@@ -315,31 +364,28 @@ class _ToMsgEmitter:
         self._builders[key] = name
         type_ref = f"_T{index}"
         self.namespace[type_ref] = msg_type
-        label = type_name_of(msg_type)
+        label = prefix or "body"
+        field_kwarg = f", field={prefix!r}" if prefix else ""
 
         fields = list(iter_fields(msg_type))
         known = "{" + ", ".join(repr(field_name) for field_name, _ in fields) + "}"
         lines = [
             f"def {name}(_d):",
+            f"    # {type_name_of(msg_type)} at {label}",
             "    if type(_d) is not dict:",
-            f"        raise ConversionError({label + ': expected an object, got '!r} + repr(_d))",
+            f"        raise ConversionError({label + ': expected an object, got '!r}"
+            f" + repr(_d){field_kwarg})",
         ]
-        if fields:
-            lines += [
-                f"    _unknown = _d.keys() - {known}",
-                "    if _unknown:",
-                f"        raise ConversionError({label + ': unknown field(s) '!r}"
-                " + ', '.join(sorted(_unknown)))",
-            ]
-        else:
-            lines += [
-                "    if _d:",
-                f"        raise ConversionError({label + ': unknown field(s) '!r}"
-                " + ', '.join(sorted(_d)))",
-            ]
+        present = "_d.keys() - " + known if fields else "set(_d)"
+        lines += [
+            f"    _unknown = {present}",
+            "    if _unknown:",
+            f"        raise ConversionError({label + ': unknown field(s) '!r}"
+            f" + ', '.join(sorted(_unknown)){field_kwarg})",
+        ]
         lines.append(f"    _m = {type_ref}()")
         for field_name, slot in fields:
-            where = f"{label}.{field_name}"
+            where = f"{prefix}.{field_name}" if prefix else field_name
             lines += [
                 f"    _v = _d.get({field_name!r}, _MISS)",
                 "    if _v is not _MISS:",
@@ -356,7 +402,7 @@ class _ToMsgEmitter:
         if isinstance(slot, AbstractGenericString):
             return f"_to_str({expr}, {where!r})"
         if isinstance(slot, NamespacedType):
-            return f"{self.builder_for(_nested_type(slot))}({expr})"
+            return f"{self.builder_for(_nested_type(slot), where)}({expr})"
         if isinstance(slot, AbstractNestedType):
             return self._collection(slot, expr, where)
         raise UnsupportedFieldError(f"no JSON decoding for field kind {type(slot).__name__}")
@@ -378,13 +424,16 @@ class _ToMsgEmitter:
         value = slot.value_type
         size, maximum = self._bounds(slot)
         guarded = self._guard(slot, expr, where)
+        # Errors about the collection itself keep the field's path; errors about one element
+        # get the [] suffix, so "name[]" and "status[].values[].key" read the same way.
+        item = f"{where}[]"
 
         if isinstance(value, NamespacedType):
-            builder = self.builder_for(_nested_type(value))
+            builder = self.builder_for(_nested_type(value), f"{where}[]")
             return self._comprehension(f"{builder}({{item}})", guarded)
 
         if isinstance(value, AbstractGenericString):
-            return self._comprehension(f"_to_str({{item}}, {where!r})", guarded)
+            return self._comprehension(f"_to_str({{item}}, {item!r})", guarded)
 
         if not isinstance(value, BasicType):
             raise UnsupportedFieldError(f"no JSON decoding for nested {type(value).__name__}")
@@ -398,13 +447,13 @@ class _ToMsgEmitter:
                 return f"_np.frombuffer({raw}, dtype=_np.uint8)"
             return f"_arr('B', {raw})"
         if name == "boolean":
-            return self._comprehension(f"_to_bool({{item}}, {where!r})", guarded)
+            return self._comprehension(f"_to_bool({{item}}, {item!r})", guarded)
 
         dtype, code, bounds = _NUMERIC[name]
         element = (
-            f"_to_float({{item}}, {where!r})"
+            f"_to_float({{item}}, {item!r})"
             if bounds is None
-            else f"_to_int({{item}}, {bounds[0]}, {bounds[1]}, {where!r})"
+            else f"_to_int({{item}}, {bounds[0]}, {bounds[1]}, {item!r})"
         )
         items = self._comprehension(element, guarded)
         if isinstance(slot, Array):
@@ -500,33 +549,33 @@ def _to_bool(value: Any, where: str) -> bool:
             return True
         if lowered in ("false", "0"):
             return False
-    raise ConversionError(f"{where}: expected a boolean, got {value!r}")
+    raise ConversionError(f"{where}: expected a boolean, got {value!r}", field=where)
 
 
 def _to_int(value: Any, low: int, high: int, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int | str):
-        raise ConversionError(f"{where}: expected an integer, got {value!r}")
+        raise ConversionError(f"{where}: expected an integer, got {value!r}", field=where)
     try:
         number = int(value)
     except ValueError:
-        raise ConversionError(f"{where}: expected an integer, got {value!r}") from None
+        raise ConversionError(f"{where}: expected an integer, got {value!r}", field=where) from None
     if not low <= number <= high:
-        raise ConversionError(f"{where}: {number} is outside [{low}, {high}]")
+        raise ConversionError(f"{where}: {number} is outside [{low}, {high}]", field=where)
     return number
 
 
 def _to_float(value: Any, where: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float | str):
-        raise ConversionError(f"{where}: expected a number, got {value!r}")
+        raise ConversionError(f"{where}: expected a number, got {value!r}", field=where)
     try:
         return float(value)
     except ValueError:
-        raise ConversionError(f"{where}: expected a number, got {value!r}") from None
+        raise ConversionError(f"{where}: expected a number, got {value!r}", field=where) from None
 
 
 def _to_str(value: Any, where: str) -> str:
     if not isinstance(value, str):
-        raise ConversionError(f"{where}: expected a string, got {value!r}")
+        raise ConversionError(f"{where}: expected a string, got {value!r}", field=where)
     return value
 
 
@@ -540,17 +589,21 @@ def _bytes_of(value: Any, size: int | None, maximum: int | None, where: str) -> 
         try:
             raw = base64.b64decode(value, validate=True)
         except (ValueError, TypeError):
-            raise ConversionError(f"{where}: expected base64, got {value!r}") from None
+            raise ConversionError(f"{where}: expected base64, got {value!r}", field=where) from None
     elif isinstance(value, list):
         raw = bytes(_to_int(item, 0, 255, where) for item in value)
     else:
         raise ConversionError(
-            f"{where}: expected a base64 string or a list of integers, got {value!r}"
+            f"{where}: expected a base64 string or a list of integers, got {value!r}", field=where
         )
     if size is not None and len(raw) != size:
-        raise ConversionError(f"{where}: expected exactly {size} bytes, got {len(raw)}")
+        raise ConversionError(
+            f"{where}: expected exactly {size} bytes, got {len(raw)}", field=where
+        )
     if maximum is not None and len(raw) > maximum:
-        raise ConversionError(f"{where}: expected at most {maximum} bytes, got {len(raw)}")
+        raise ConversionError(
+            f"{where}: expected at most {maximum} bytes, got {len(raw)}", field=where
+        )
     return raw
 
 
@@ -561,21 +614,25 @@ def _octet_list(value: Any, size: int | None, maximum: int | None, where: str) -
 
 def _check_list(value: Any, where: str) -> Any:
     if not isinstance(value, list):
-        raise ConversionError(f"{where}: expected an array, got {value!r}")
+        raise ConversionError(f"{where}: expected an array, got {value!r}", field=where)
     return value
 
 
 def _check_len(value: Any, size: int, where: str) -> Any:
     if not isinstance(value, list):
-        raise ConversionError(f"{where}: expected an array, got {value!r}")
+        raise ConversionError(f"{where}: expected an array, got {value!r}", field=where)
     if len(value) != size:
-        raise ConversionError(f"{where}: expected exactly {size} items, got {len(value)}")
+        raise ConversionError(
+            f"{where}: expected exactly {size} items, got {len(value)}", field=where
+        )
     return value
 
 
 def _check_max(value: Any, maximum: int, where: str) -> Any:
     if not isinstance(value, list):
-        raise ConversionError(f"{where}: expected an array, got {value!r}")
+        raise ConversionError(f"{where}: expected an array, got {value!r}", field=where)
     if len(value) > maximum:
-        raise ConversionError(f"{where}: expected at most {maximum} items, got {len(value)}")
+        raise ConversionError(
+            f"{where}: expected at most {maximum} items, got {len(value)}", field=where
+        )
     return value

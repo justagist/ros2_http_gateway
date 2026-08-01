@@ -4,18 +4,19 @@ def to_dict(_m):
 
 # builtin_interfaces/msg/Time dict_to_msg
 def _build0(_d):
+    # builtin_interfaces/msg/Time at body
     if type(_d) is not dict:
-        raise ConversionError('builtin_interfaces/msg/Time: expected an object, got ' + repr(_d))
+        raise ConversionError('body: expected an object, got ' + repr(_d))
     _unknown = _d.keys() - {'sec', 'nanosec'}
     if _unknown:
-        raise ConversionError('builtin_interfaces/msg/Time: unknown field(s) ' + ', '.join(sorted(_unknown)))
+        raise ConversionError('body: unknown field(s) ' + ', '.join(sorted(_unknown)))
     _m = _T0()
     _v = _d.get('sec', _MISS)
     if _v is not _MISS:
-        _m.sec = _to_int(_v, -2147483648, 2147483647, 'builtin_interfaces/msg/Time.sec')
+        _m.sec = _to_int(_v, -2147483648, 2147483647, 'sec')
     _v = _d.get('nanosec', _MISS)
     if _v is not _MISS:
-        _m.nanosec = _to_int(_v, 0, 4294967295, 'builtin_interfaces/msg/Time.nanosec')
+        _m.nanosec = _to_int(_v, 0, 4294967295, 'nanosec')
     return _m
 
 def from_dict(_d):

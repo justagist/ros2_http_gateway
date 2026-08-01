@@ -5,7 +5,8 @@ One YAML file describes the entire HTTP surface. Nothing not named in it is reac
 Validate a file without starting anything:
 
 ```bash
-ros2-http-gateway --check gateway.yaml          # exit 0 or 1, one line per endpoint
+ros2-http-gateway --check gateway.yaml           # exit 0 or 1, one line per endpoint
+ros2-http-gateway --check --online gateway.yaml  # also check against the live graph
 ros2-http-gateway --check --discovery-timeout 15 gateway.yaml
 ```
 
@@ -84,6 +85,20 @@ one type, startup fails and names the endpoint and the candidates it saw.
 Pinning `type` explicitly makes `--check` hermetic: no graph, no running system, so it
 works as a CI gate on a pull request. Both shipped examples pin their types for exactly
 that reason.
+
+`--check --online` adds the other half. It looks up every endpoint, pinned ones included,
+and reports any whose configured type is not what the graph advertises:
+
+```
+error: gateway.yaml: 1 problem(s)
+  - endpoints./mission/status: configured as example_interfaces/msg/String, but
+    /mission/state on the graph is std_msgs/msg/String
+```
+
+A type string can be syntactically valid, importable, and still not be the one the robot
+is publishing. The hermetic check cannot catch that; run `--online` on the machine as a
+deploy-time smoke test. It only applies to `--check`, since serving always uses the live
+graph.
 
 ## `defaults`
 
@@ -214,6 +229,7 @@ number regardless, since a path parameter is always a string.
 | `int8`..`uint32` | number | Range checked on the way in |
 | `int64`, `uint64` | string | Number when `int64_as_string: false` |
 | `float32`, `float64` | number or `null` | NaN and the infinities become `null`; JSON has no other spelling |
+| `float32` collections | number | Printed as the shortest text that round-trips as `float32`, so `1.87` not `1.8700000047683716` |
 | `string`, `wstring` | string | Bounded lengths are enforced |
 | `byte` (scalar) | number 0-255 | |
 | `uint8[]`, `byte[]` and sequences | base64 string | Also accepted as an array of integers on the way in |
@@ -222,7 +238,20 @@ number regardless, since a path parameter is always a string.
 
 On the way in, a field that is absent keeps the default from the ROS message definition.
 An **unknown** field is rejected rather than ignored, because silently dropping a
-misspelled field is how an operator ends up believing a command was applied.
+misspelled field is how an operator ends up believing a command was applied. Ranges,
+fixed array lengths and sequence bounds are all enforced, and a violation returns HTTP 400
+quoting the dotted path of the field:
+
+```json
+{
+  "success": false,
+  "error_code": "BAD_REQUEST",
+  "message": "header.stamp.sec: 2147483648 is outside [-2147483648, 2147483647]",
+  "field": "header.stamp.sec"
+}
+```
+
+The full status taxonomy is in [protocol.md](protocol.md).
 
 Large binary payloads (images, point clouds) are a non-goal: base64 in JSON is the wrong
 transport for them. See the non-goals in the README.

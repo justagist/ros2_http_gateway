@@ -259,6 +259,74 @@ def test_every_unresolvable_endpoint_is_reported_at_once(
 
 
 # --------------------------------------------------------------------------------------
+# --check --online
+# --------------------------------------------------------------------------------------
+
+
+def test_online_verification_accepts_a_pinned_type_the_graph_agrees_with(
+    tmp_path: Path, fake_actions: None
+) -> None:
+    graph = FakeGraph(topics={"/mission/state": ["example_interfaces/msg/String"]})
+    resolved = resolve(
+        load(tmp_path, MINIMAL), node=graph, discovery_timeout=0.0, verify_online=True
+    )
+    assert resolved.endpoints["/state"].type_name == "example_interfaces/msg/String"
+
+
+def test_online_verification_catches_a_pinned_type_that_is_not_what_is_published(
+    tmp_path: Path, fake_actions: None
+) -> None:
+    """The whole point of the flag: a typo that is syntactically valid and importable."""
+    graph = FakeGraph(topics={"/mission/state": ["std_msgs/msg/String"]})
+    (message,) = resolve_problems(
+        load(tmp_path, MINIMAL), node=graph, discovery_timeout=0.0, verify_online=True
+    )
+    assert "configured as example_interfaces/msg/String" in message
+    assert "/mission/state on the graph is std_msgs/msg/String" in message
+
+
+def test_online_verification_reports_a_pinned_name_missing_from_the_graph(
+    tmp_path: Path, fake_actions: None
+) -> None:
+    (message,) = resolve_problems(
+        load(tmp_path, MINIMAL), node=FakeGraph(), discovery_timeout=0.0, verify_online=True
+    )
+    assert "was not on the ROS graph" in message
+    assert "Add an explicit `type:`" not in message, "the type is already pinned"
+
+
+def test_offline_check_ignores_the_graph_entirely(tmp_path: Path, fake_actions: None) -> None:
+    """A wrong graph must not fail the hermetic check; that is what makes it a CI gate."""
+    graph = FakeGraph(topics={"/mission/state": ["std_msgs/msg/String"]})
+    assert resolve(load(tmp_path, MINIMAL), node=graph, discovery_timeout=0.0).endpoints
+
+
+def test_online_verification_covers_services_and_actions(
+    tmp_path: Path, fake_actions: None
+) -> None:
+    document = copy.deepcopy(MINIMAL)
+    document["endpoints"]["/call"] = {
+        "service": "/trigger",
+        "type": "std_srvs/srv/Trigger",
+        "roles": ["operator"],
+    }
+    document["endpoints"]["/pick"] = {
+        "action": "/fib",
+        "type": "example_interfaces/action/Fibonacci",
+        "roles": ["operator"],
+    }
+    graph = FakeGraph(
+        topics={"/mission/state": ["example_interfaces/msg/String"]},
+        services={"/trigger": ["example_interfaces/srv/Trigger"]},
+        actions={"/fib": ["example_interfaces/action/Fibonacci"]},
+    )
+    (message,) = resolve_problems(
+        load(tmp_path, document), node=graph, discovery_timeout=0.0, verify_online=True
+    )
+    assert "endpoints./call" in message and "std_srvs/srv/Trigger" in message
+
+
+# --------------------------------------------------------------------------------------
 # precondition fields
 # --------------------------------------------------------------------------------------
 

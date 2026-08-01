@@ -288,7 +288,7 @@ def test_unknown_field_is_rejected_not_ignored() -> None:
 
 def test_unknown_field_in_a_nested_message_is_rejected() -> None:
     cls = get_message("geometry_msgs/msg/Twist")
-    with pytest.raises(ConversionError, match="geometry_msgs/msg/Vector3: unknown field"):
+    with pytest.raises(ConversionError, match="linear: unknown field"):
         build_dict_to_msg(cls)({"linear": {"w": 1.0}})
 
 
@@ -356,6 +356,167 @@ def test_non_object_body_is_rejected() -> None:
     cls = get_message("geometry_msgs/msg/Twist")
     with pytest.raises(ConversionError, match="expected an object"):
         build_dict_to_msg(cls)([1, 2, 3])
+
+
+# --------------------------------------------------------------------------------------
+# numeric sequence strategy
+# --------------------------------------------------------------------------------------
+
+
+def test_short_numeric_sequence_becomes_a_list_and_long_one_a_numpy_view() -> None:
+    """Both encode identically; the split exists only because each is faster at its length."""
+    cls = get_message("sensor_msgs/msg/JointState")
+    to_dict = build_msg_to_dict(cls)
+
+    short = cls()
+    short.position = [float(i) for i in range(8)]
+    assert isinstance(to_dict(short)["position"], list)
+
+    long_message = cls()
+    long_message.position = [float(i) for i in range(512)]
+    assert isinstance(to_dict(long_message)["position"], numpy.ndarray)
+
+
+@pytest.mark.parametrize("length", [0, 1, 63, 64, 65, 300])
+def test_numeric_sequence_json_is_identical_either_side_of_the_threshold(length: int) -> None:
+    cls = get_message("sensor_msgs/msg/JointState")
+    message = cls()
+    message.position = [i * 1.5 for i in range(length)]
+    encoded = _json_round_trip(build_msg_to_dict(cls)(message))
+    assert isinstance(encoded, dict)
+    assert encoded["position"] == [i * 1.5 for i in range(length)]
+
+
+def test_numpy_view_of_a_sequence_is_zero_copy() -> None:
+    """The point of the exercise: no list build, no second walk in orjson."""
+    cls = get_message("sensor_msgs/msg/JointState")
+    message = cls()
+    message.position = [float(i) for i in range(128)]
+    view = build_msg_to_dict(cls)(message)["position"]
+    assert isinstance(view, numpy.ndarray)
+    assert view.base is not None, "a copy would have no base buffer"
+
+
+def test_float32_sequence_always_uses_the_view_whatever_its_length() -> None:
+    """Otherwise number formatting would depend on the length of the sequence.
+
+    array('f').tolist() widens to double and prints 1.8700000047683716; numpy prints the
+    shortest text that round-trips as float32, 1.87. Both read back exactly, but the choice
+    must not vary with length, and fixed-size float32[N] already emits the numpy form.
+    """
+    cls = get_message("test_msgs/msg/UnboundedSequences")
+    to_dict = build_msg_to_dict(cls)
+    for length in (1, 4, 200):
+        message = cls()
+        message.float32_values = [1.87] * length
+        encoded = to_dict(message)
+        assert isinstance(encoded["float32_values"], numpy.ndarray)
+        assert b"1.87," in orjson.dumps(encoded, option=ORJSON_OPTS).replace(b"]", b",")
+
+
+def test_float32_scalar_and_sequence_and_array_agree() -> None:
+    """The three float32 shapes must not print the same value three different ways."""
+    arrays = get_message("test_msgs/msg/Arrays")()
+    arrays.float32_values = [1.87, 1.87, 1.87]
+    fixed = build_msg_to_dict(type(arrays))(arrays)["float32_values"]
+
+    sequences = get_message("test_msgs/msg/UnboundedSequences")()
+    sequences.float32_values = [1.87]
+    sequence = build_msg_to_dict(type(sequences))(sequences)["float32_values"]
+
+    assert orjson.dumps(fixed[:1], option=ORJSON_OPTS) == orjson.dumps(sequence, option=ORJSON_OPTS)
+
+
+def test_int64_sequence_ignores_the_view_because_every_element_needs_str() -> None:
+    cls = get_message("std_msgs/msg/Int64MultiArray")
+    message = cls()
+    message.data = [BIG_INT64] * 128
+    encoded = build_msg_to_dict(cls)(message)["data"]
+    assert encoded == [str(BIG_INT64)] * 128
+
+
+def test_walrus_bindings_do_not_collide_across_fields() -> None:
+    """Three double sequences in one dict literal each need their own temporary."""
+    cls = get_message("sensor_msgs/msg/JointState")
+    message = cls()
+    message.position = [float(i) for i in range(100)]
+    message.velocity = [float(i) for i in range(3)]
+    message.effort = [float(i) for i in range(200)]
+    encoded = _json_round_trip(build_msg_to_dict(cls)(message))
+    assert isinstance(encoded, dict)
+    assert len(encoded["position"]) == 100
+    assert len(encoded["velocity"]) == 3
+    assert len(encoded["effort"]) == 200
+
+
+def test_numeric_sequence_inside_a_collection_of_messages_still_works() -> None:
+    """A walrus inside a comprehension binds in the enclosing scope; make sure it compiles."""
+    cls = get_message("test_msgs/msg/MultiNested")
+    assert build_msg_to_dict(cls)(populate(cls))["unbounded_sequence_of_arrays"] is not None
+
+
+# --------------------------------------------------------------------------------------
+# error paths name the field the client wrote
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("type_name", "body", "expected_field", "fragment"),
+    [
+        ("geometry_msgs/msg/Twist", {"linear": {"x": "abc"}}, "linear.x", "expected a number"),
+        ("geometry_msgs/msg/Twist", {"linear": {"w": 1}}, "linear", "unknown field(s) w"),
+        (
+            "sensor_msgs/msg/Imu",
+            {"header": {"stamp": {"sec": 2**31}}},
+            "header.stamp.sec",
+            "is outside",
+        ),
+        (
+            "sensor_msgs/msg/Imu",
+            {"orientation_covariance": [1.0]},
+            "orientation_covariance",
+            "expected exactly 9 items",
+        ),
+        ("sensor_msgs/msg/JointState", {"name": [1]}, "name[]", "expected a string"),
+        (
+            "diagnostic_msgs/msg/DiagnosticArray",
+            {"status": [{"values": [{"key": 5}]}]},
+            "status[].values[].key",
+            "expected a string",
+        ),
+        (
+            "diagnostic_msgs/msg/DiagnosticArray",
+            {"status": [{"nope": 5}]},
+            "status[]",
+            "unknown field(s) nope",
+        ),
+    ],
+)
+def test_conversion_error_carries_the_dotted_field_path(
+    type_name: str, body: object, expected_field: str, fragment: str
+) -> None:
+    """The 400 body quotes this straight back, so it has to read like the request."""
+    with pytest.raises(ConversionError) as exc:
+        build_dict_to_msg(get_message(type_name))(body)
+    assert exc.value.field == expected_field
+    assert str(exc.value).startswith(f"{expected_field}: ")
+    assert fragment in str(exc.value)
+
+
+def test_unknown_field_at_the_root_is_reported_against_the_body() -> None:
+    with pytest.raises(ConversionError) as exc:
+        build_dict_to_msg(get_message("geometry_msgs/msg/Twist"))({"linaer": {}})
+    assert exc.value.field is None
+    assert str(exc.value) == "body: unknown field(s) linaer"
+
+
+def test_same_type_at_two_paths_gets_two_builders_with_distinct_labels() -> None:
+    """Vector3 appears at both linear and angular; each must name its own path."""
+    from_dict = build_dict_to_msg(get_message("geometry_msgs/msg/Twist"))
+    for field in ("linear", "angular"):
+        with pytest.raises(ConversionError) as exc:
+            from_dict({field: {"x": "nope"}})
+        assert exc.value.field == f"{field}.x"
 
 
 # --------------------------------------------------------------------------------------

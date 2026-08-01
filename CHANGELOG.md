@@ -23,7 +23,25 @@ All notable changes to this project are documented here. Format follows
 - `ros2-http-gateway --check` validates a config, resolves every type, compiles every
   converter and checks every dotted precondition field against a real message definition,
   then prints one line per endpoint. Exit 0 or 1.
-- `docs/configuration.md`: the full config reference.
+- `docs/configuration.md` and `docs/protocol.md`: the full config reference, and the wire
+  protocol including the status-code taxonomy (4xx never reached ROS, 200 carries the
+  ROS-side outcome, one error envelope for both).
+- `--check --online` additionally verifies pinned `type:` values against the live ROS graph
+  and reports any that disagree with what is actually being published. The default check
+  stays hermetic so it can gate a pull request.
+
+### Changed
+
+- Numeric sequences take a zero-copy numpy view of the `array.array` buffer instead of
+  building a list, once they are long enough for that to pay. Measured crossover is 64
+  elements for every dtype; at 8192 the view is 1.6x faster for doubles and 3.3x for int32.
+- `float32` sequences always take the view, at any length. The two paths do not produce the
+  same JSON (`1.87` versus `1.8700000047683716`), and formatting that varied with the length
+  of a sequence would be a hostile API. This matches what fixed-size `float32[N]` already
+  emitted.
+- Conversion errors now name the field by the dotted path the client wrote
+  (`header.stamp.sec`, `status[].values[].key`) rather than by the ROS type that declared
+  it, and carry it separately as `ConversionError.field` for the `BAD_REQUEST` envelope.
 
 ### Notes
 
