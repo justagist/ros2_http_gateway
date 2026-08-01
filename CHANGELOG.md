@@ -8,6 +8,24 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- The gateway serves. `ros2-http-gateway config.yaml` brings up a ROS node and an HTTP
+  listener: topic `GET` returns the latest cached sample, topic `POST` publishes, and
+  `GET <base>/health` answers unauthenticated.
+- Bearer-token authentication with per-endpoint role checks. Digests are compared with
+  `hmac.compare_digest`, and every configured token is checked even after a match so that
+  timing does not reveal which one was presented. `Authenticator` is a protocol, so JWT or
+  OIDC can be added without touching the request path.
+- Audit logging to stderr or a file: one JSON line per request that reached a configured
+  route, denials included. Recording never blocks the request path, writes are batched, and
+  there are no fields for a token or a body so neither can be logged by accident.
+- Topic caches built on `raw=True` subscriptions. A received message costs one tuple store;
+  deserialisation and JSON encoding happen when a read arrives and are memoised by sequence
+  number, so a 1 kHz topic read once a second is decoded once a second.
+- Executor selection per `ros.executor`, feature-detecting `EventsExecutor`. `auto` falls
+  back to `MultiThreadedExecutor`; `events` on a distro without it is a startup error.
+- Service and action endpoints are routed and enforce auth, but answer 501 naming the phase
+  that will serve them, rather than 404 which reads like a config mistake.
+
 - Config engine: YAML, JSON Schema validation against the bundled `config.schema.json`,
   defaults merging, and a frozen typed model. Every problem in a file is reported at once,
   each naming its exact location. Runs without ROS.
@@ -74,6 +92,12 @@ All notable changes to this project are documented here. Format follows
   it, and carry it separately as `ConversionError.field` for the `BAD_REQUEST` envelope.
 
 ### Fixed
+
+- The ROS node is destroyed on shutdown. It was not: uvicorn restores the default signal
+  handler and re-raises the captured signal as `run()` unwinds, so teardown placed after
+  that call never executed. Teardown now happens in the lifespan, which is also the correct
+  ordering (after HTTP has drained).
+- Ctrl-C no longer prints a `KeyboardInterrupt` traceback; the gateway exits 130 quietly.
 
 - A fixed-size `uint8[N]` built from a request body was a read-only numpy view, so anything
   mutating the message in place hit `assignment destination is read-only`.

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib
 import os
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -64,3 +66,20 @@ def pytest_configure(config: pytest.Config) -> None:
             "Source a ROS 2 environment, or unset the variable to allow the ROS tests to "
             "skip."
         )
+
+
+@pytest.fixture
+def talker() -> Iterator[Any]:
+    """A ROS node publishing the gateway's state topic and listening for its commands.
+
+    Lives here rather than in a helper module so that test files can take it as a parameter
+    without importing the name, which the linter would otherwise read as a redefinition. The
+    ROS import is inside the body, so collecting this file without ROS stays harmless.
+    """
+    from gateway_fixtures import Talker
+
+    instance = Talker()
+    try:
+        yield instance
+    finally:
+        instance.close()

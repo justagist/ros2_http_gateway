@@ -86,8 +86,21 @@ before conversion, so the schemas never have to advertise string-for-number.
 ```
 
 `stamp` is the wall-clock time the sample arrived, `seq` a monotonic counter per endpoint.
-`stale` is true when the newest sample is older than `stale_after_ms`. A GET before any
-sample has arrived returns 200 with `"data": null` and `"seq": 0`.
+`stale` is true when the newest sample is older than `stale_after_ms`.
+
+Before any message has arrived the body is exactly:
+
+```json
+{"data": null, "stamp": null, "seq": 0, "stale": true}
+```
+
+A 200 rather than a 404, because the endpoint is configured and reachable; there is simply
+nothing on the topic yet. Stale data is still returned once it exists, flagged rather than
+withheld: an HMI showing a value greyed out is more useful than one showing nothing.
+
+A publish returns as soon as the message is queued for the ROS side. If a client publishes
+faster than ROS drains, the queue fills and further publishes get 503 with
+`PUBLISH_QUEUE_FULL` rather than blocking the event loop.
 
 ### `POST <base>/<endpoint>` (publish)
 
@@ -161,6 +174,12 @@ client never slows a fast one.
 
 Action feedback is not carried here; it is streamed per goal from
 `/pick/{goal_id}/stream`.
+
+## Process lifecycle
+
+`SIGTERM` and `SIGINT` both stop the gateway: it stops accepting, lets in-flight requests
+finish, flushes the audit queue and destroys the ROS node, in that order. Ctrl-C exits 130
+without a traceback; `SIGTERM` propagates as usual, which is what an init system expects.
 
 ## Audit
 

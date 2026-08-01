@@ -115,12 +115,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         _report_check(resolved, online=args.online)
         return 0
 
-    # The serve path lands in phase 2.
-    print(
-        "error: the HTTP server lands in phase 2; use --check to validate a config today.",
-        file=sys.stderr,
-    )
-    return 1
+    from .server import serve
+
+    try:
+        return serve(resolved)
+    except ConfigError as exc:
+        # The executor choice can only be validated once rclpy is being brought up.
+        print(f"error: {exc.format()}", file=sys.stderr)
+        return 1
 
 
 def _report_check(resolved: ResolvedConfig, *, online: bool = False) -> None:

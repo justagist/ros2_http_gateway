@@ -8,10 +8,11 @@ logging, server-sent events and an auto-generated OpenAPI 3.1 document.
 
 **Deny by default: nothing is exposed unless it appears in the config.**
 
-> Status: under construction. The config engine, interface type resolution, converter
-> code generation and `--check` all work today; the HTTP server itself lands next. See
-> [CHANGELOG.md](CHANGELOG.md) for what is real, and
-> [docs/configuration.md](docs/configuration.md) for the config reference.
+> Status: under construction. Topics work end to end today: `GET` reads the latest cached
+> sample, `POST` publishes, with bearer auth, role checks and audit logging. Service and
+> action endpoints are configured and routed but answer 501 until the next phases. See
+> [CHANGELOG.md](CHANGELOG.md) for what is real, [docs/configuration.md](docs/configuration.md)
+> for the config format and [docs/protocol.md](docs/protocol.md) for the wire protocol.
 
 ## Why not rosbridge
 
