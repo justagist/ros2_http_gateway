@@ -1,0 +1,91 @@
+# Development example: permissive, localhost only, plaintext token.
+#
+# Every `type:` is given explicitly and uses an interface package from a standard ROS 2
+# installation, so `ros2-http-gateway --check examples/dev.yaml` passes without a live
+# graph. In a real deployment you can omit `type:` and let the gateway resolve it from
+# the graph at startup.
+#
+# DO NOT deploy this file. See locked_down.yaml for the shape of a reviewable config.
+
+defaults:
+  roles: [operator]
+  stale_after_ms: 2000
+
+endpoints:
+  # Topic without `method:` is a GET of the latest cached sample.
+  /mission/status:
+    topic: /mission/state
+    type: example_interfaces/msg/String
+    roles: [viewer, operator]
+    stale_after_ms: 1000
+
+  /odom:
+    topic: /odom
+    type: geometry_msgs/msg/PoseStamped
+    roles: [viewer, operator]
+
+  # Topic with `method: POST` publishes the request body.
+  /cmd_vel:
+    topic: /cmd_vel
+    type: geometry_msgs/msg/Twist
+    method: POST
+    roles: [operator]
+
+  # Service with path parameters mapped into request fields.
+  /math/{a}/plus/{b}:
+    service: /add_two_ints
+    type: example_interfaces/srv/AddTwoInts
+    method: POST
+    timeout_ms: 3000
+    request_map:
+      a: "{a}"
+      b: "{b}"
+
+  # Service guarded by a state precondition read from /mission/status.
+  # A real mission controller would carry the command in the request; Trigger is used
+  # here only to keep the example free of custom interface packages.
+  /mission/{command}:
+    service: /mission_control
+    type: std_srvs/srv/Trigger
+    method: POST
+    timeout_ms: 3000
+    preconditions:
+      - state_endpoint: /mission/status
+        field: data
+        allow:
+          start: [IDLE]
+          abort: [RUNNING, PAUSED]
+          reset: ["*"]
+
+  /pick:
+    action: /fibonacci
+    type: example_interfaces/action/Fibonacci
+    roles: [operator]
+
+auth:
+  tokens:
+    # Plaintext tokens are hashed on load and logged as a loud warning. Use
+    # token_sha256 in anything you would not push to a public branch.
+    - token: dev-token-change-me
+      user: dev-workstation
+      roles: [viewer, operator]
+
+sse:
+  path: /events
+  include: [/mission/status, /odom]
+  overflow: drop_oldest
+  max_clients: 32
+
+http:
+  bind: 127.0.0.1
+  port: 8080
+  base_path: /api/v1
+
+ros:
+  executor: auto
+
+actions:
+  result_ttl_s: 300
+
+audit:
+  sink: stderr

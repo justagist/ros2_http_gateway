@@ -1,0 +1,133 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ros2-http-gateway"
+dynamic = ["version", "requires-python"]
+description = "Config-driven, authenticated HTTP + SSE gateway for ROS 2"
+readme = "README.md"
+# requires-python deliberately lives in setup.py, not here. See the comment there:
+# colcon's package identification cannot parse the SpecifierSet that setuptools builds
+# from a pyproject `requires-python`.
+license = { text = "Apache-2.0" }
+authors = [{ name = "Saif Sidhik", email = "saif.sidhik@helloleap.ai" }]
+keywords = ["ros", "ros2", "http", "rest", "gateway", "sse", "openapi", "robotics"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Manufacturing",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Typing :: Typed",
+]
+
+# Every dependency below must carry a justification. Keep this list short.
+dependencies = [
+  # ASGI toolkit: routing, request/response objects, streaming responses for SSE.
+  # Chosen over FastAPI because OpenAPI is generated from our own config model and
+  # request validation is done by generated JSON Schemas, so pydantic buys nothing.
+  "starlette>=0.37",
+  # ASGI server, launched programmatically. The [standard] extra supplies uvloop and
+  # httptools, which the hot request path depends on for its latency budget.
+  "uvicorn[standard]>=0.29",
+  # JSON encoder/decoder. The only mainstream one that serialises numpy arrays natively
+  # (OPT_SERIALIZE_NUMPY), which keeps ROS numeric arrays off the .tolist() copy path.
+  "orjson>=3.9",
+  # Config file parsing. Already present in every ROS 2 environment, so it adds no
+  # transitive weight where this package is most often installed.
+  "pyyaml>=6.0",
+  # Validates the config file against the shipped config.schema.json, so a malformed
+  # deployment config fails at startup instead of at the first request.
+  "jsonschema>=4.18",
+]
+
+# rclpy is deliberately NOT listed here. It is not distributable via PyPI; it comes from
+# the sourced ROS 2 environment and is declared in package.xml as an <exec_depend>.
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "pytest>=7.4",
+  "pytest-asyncio>=0.23",
+  "pytest-benchmark>=4.0",
+  "httpx>=0.27",
+  "types-pyyaml",
+  "types-jsonschema",
+  "build",
+  "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.urls]
+Homepage = "https://github.com/justagist/ros2_http_gateway"
+Repository = "https://github.com/justagist/ros2_http_gateway"
+Changelog = "https://github.com/justagist/ros2_http_gateway/blob/main/CHANGELOG.md"
+
+[project.scripts]
+ros2-http-gateway = "ros2_http_gateway.cli:main"
+# Second name so `ros2 run ros2_http_gateway gateway` resolves under an ament_python
+# install, where console scripts land in lib/ros2_http_gateway/.
+gateway = "ros2_http_gateway.cli:main"
+
+[tool.setuptools.dynamic]
+# Single source of truth for the version string. package.xml mirrors it and
+# test/test_packaging.py fails if the two ever drift.
+version = { attr = "ros2_http_gateway._version.__version__" }
+
+[tool.setuptools]
+packages = ["ros2_http_gateway"]
+
+[tool.setuptools.package-data]
+ros2_http_gateway = ["py.typed", "config.schema.json"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # import sorting
+  "N",   # pep8-naming
+  "UP",  # pyupgrade
+  "B",   # bugbear
+  "A",   # builtin shadowing
+  "C4",  # comprehensions
+  "RUF", # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Generated converter source is assembled from string fragments; long lines are fine.
+"ros2_http_gateway/codegen.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+# rclpy and the ROS interface packages ship no type information.
+[[tool.mypy.overrides]]
+module = [
+  "rclpy.*",
+  "rosidl_runtime_py.*",
+  "rosidl_parser.*",
+  "action_msgs.*",
+  "builtin_interfaces.*",
+  "unique_identifier_msgs.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+asyncio_mode = "auto"
+markers = [
+  "ros: requires a sourced ROS 2 environment (skipped on plain Python CI)",
+  "bench: performance benchmark, informational unless asserted",
+]

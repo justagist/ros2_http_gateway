@@ -1,0 +1,101 @@
+"""Command line entry point.
+
+``--help`` and ``--version`` work without a ROS 2 environment; anything that touches the
+graph checks for ``rclpy`` first and exits with a single actionable message.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from collections.abc import Sequence
+
+from ._version import __version__
+from .ros_env import RosEnvironmentError, require_rclpy
+
+_LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+
+_EPILOG = """\
+examples:
+  ros2-http-gateway config.yaml                 serve the gateway
+  ros2-http-gateway --check config.yaml         validate config and exit (CI friendly)
+  ros2-http-gateway --check --dump-openapi openapi.json config.yaml
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the argument parser.
+
+    Returns:
+        A parser covering every documented flag. Kept free of ROS imports so that
+        ``--help`` works on a plain Python installation.
+    """
+    parser = argparse.ArgumentParser(
+        prog="ros2-http-gateway",
+        description="Config-driven, authenticated HTTP + SSE gateway for ROS 2.",
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("config", nargs="?", help="path to the gateway YAML config file")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate the config, including graph type resolution, then exit 0/1",
+    )
+    parser.add_argument(
+        "--discovery-timeout",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="how long to wait for the ROS graph while resolving types (default: 5)",
+    )
+    parser.add_argument(
+        "--dump-openapi",
+        metavar="PATH",
+        help="write the generated OpenAPI 3.1 document to PATH (implies --check)",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="info",
+        choices=("debug", "info", "warning", "error"),
+        help="gateway log verbosity (default: info)",
+    )
+    parser.add_argument("--version", action="version", version=f"ros2-http-gateway {__version__}")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command line interface.
+
+    Args:
+        argv: Argument vector excluding the program name. Defaults to ``sys.argv[1:]``.
+
+    Returns:
+        Process exit code: 0 on success, 1 on any handled failure, 2 on usage error.
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=args.log_level.upper(), format=_LOG_FORMAT, stream=sys.stderr)
+
+    if args.config is None:
+        parser.error("a config file is required")
+
+    try:
+        require_rclpy()
+    except RosEnvironmentError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    # Phase 1 replaces this with config load + graph type resolution + codegen, and
+    # phase 2 adds the serve path. Kept explicit so the tree never pretends to work.
+    print(
+        "error: the config engine lands in phase 1 and the server in phase 2; "
+        "this build only provides the packaging skeleton.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

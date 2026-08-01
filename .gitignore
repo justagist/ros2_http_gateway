@@ -1,0 +1,21 @@
+# Working notes and ADRs live here and are intentionally untracked.
+.docs/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+install/
+log/
+
+.venv/
+venv/
+
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.benchmarks/
+.coverage
+htmlcov/

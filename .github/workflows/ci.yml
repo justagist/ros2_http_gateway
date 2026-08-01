@@ -1,0 +1,118 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything that must work without ROS installed. Guards the "pip install on a plain
+  # machine" half of the dual-install promise and keeps the rclpy seam honest.
+  lint-type-unit:
+    name: lint + mypy + unit (py${{ matrix.python }}, no ROS)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: ruff lint
+        run: ruff check .
+      - name: ruff format
+        run: ruff format --check .
+      - name: mypy
+        run: mypy --strict ros2_http_gateway
+      - name: unit tests (no ROS)
+        run: pytest -m 'not ros' -q
+      - name: cli works without ROS
+        run: |
+          ros2-http-gateway --help
+          ros2-http-gateway --version
+          # Must fail with the actionable message, not a traceback.
+          if ros2-http-gateway --check examples/dev.yaml 2>err.txt; then
+            echo 'expected a non-zero exit without ROS'; exit 1
+          fi
+          grep -q 'rclpy not found' err.txt
+
+  build-sdist-wheel:
+    name: build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # Full suite inside real ROS containers, once per distro. Kilted and newer also run the
+  # integration suite under both executors, since EventsExecutor only exists there.
+  ros:
+    name: ${{ matrix.distro }} (${{ matrix.executor }})
+    runs-on: ubuntu-latest
+    container: ros:${{ matrix.distro }}-ros-base
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: humble, executor: multithreaded }
+          - { distro: jazzy, executor: multithreaded }
+          - { distro: kilted, executor: multithreaded }
+          - { distro: kilted, executor: events }
+          - { distro: lyrical, executor: multithreaded }
+          - { distro: lyrical, executor: events }
+          - { distro: rolling, executor: multithreaded }
+          - { distro: rolling, executor: events }
+    env:
+      GATEWAY_TEST_EXECUTOR: ${{ matrix.executor }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: apt deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-pip python3-venv \
+            ros-${{ matrix.distro }}-example-interfaces \
+            ros-${{ matrix.distro }}-test-msgs \
+            ros-${{ matrix.distro }}-geometry-msgs \
+            ros-${{ matrix.distro }}-sensor-msgs \
+            ros-${{ matrix.distro }}-std-srvs
+      - name: install package
+        run: |
+          # System python is the ROS python; rclpy must stay importable, so install in place.
+          pip install --break-system-packages -e '.[dev]' || pip install -e '.[dev]'
+      - name: colcon build
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          mkdir -p /tmp/ws/src
+          ln -s "$GITHUB_WORKSPACE" /tmp/ws/src/ros2_http_gateway
+          cd /tmp/ws
+          colcon build --packages-select ros2_http_gateway
+          source install/setup.bash
+          ros2 run ros2_http_gateway gateway --help
+      - name: full test suite
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          pytest -q
+      # A `--check examples/*.yaml` step is added here in phase 1, once --check does
+      # something. Adding it now would only ever be red.

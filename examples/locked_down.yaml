@@ -1,0 +1,72 @@
+# Production-shaped example: least privilege, hashed tokens, audit to file.
+#
+# Properties worth copying:
+#   - no publish (topic POST) endpoints at all
+#   - read-only `viewer` role separated from `operator`
+#   - every mutating service behind a state precondition
+#   - token_sha256 only, never plaintext
+#   - bound to localhost; TLS and client identity are the reverse proxy's job
+#
+# Types are pinned explicitly rather than resolved from the graph, so that a config
+# review and `--check` in CI are both meaningful without a running system.
+
+defaults:
+  roles: [operator]
+  stale_after_ms: 2000
+
+endpoints:
+  /mission/status:
+    topic: /mission/state
+    type: example_interfaces/msg/String
+    roles: [viewer, operator]
+    stale_after_ms: 1000
+
+  /mission/{command}:
+    service: /mission_control
+    type: std_srvs/srv/Trigger
+    method: POST
+    roles: [operator]
+    timeout_ms: 3000
+    preconditions:
+      - state_endpoint: /mission/status
+        field: data
+        allow:
+          start: [IDLE]
+          abort: [RUNNING, PAUSED]
+
+  /pick:
+    action: /fibonacci
+    type: example_interfaces/action/Fibonacci
+    roles: [operator]
+
+auth:
+  tokens:
+    # sha256 of the operator token. Generate with:
+    #   printf %s "$TOKEN" | sha256sum
+    - token_sha256: "3c469e9d6c5875d37a43f353d4f88e61fcf812c66eee3457465a40b0da4153e0"
+      user: hmi-station-1
+      roles: [operator]
+    - token_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      user: fleet-dashboard
+      roles: [viewer]
+
+sse:
+  path: /events
+  include: [/mission/status]
+  overflow: drop_oldest
+  max_clients: 8
+
+http:
+  bind: 127.0.0.1
+  port: 8080
+  base_path: /api/v1
+
+ros:
+  executor: auto
+
+actions:
+  result_ttl_s: 300
+
+audit:
+  sink: file
+  path: /var/log/ros2_http_gateway/audit.jsonl
