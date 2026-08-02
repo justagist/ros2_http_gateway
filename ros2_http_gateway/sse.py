@@ -37,11 +37,17 @@ if TYPE_CHECKING:  # importing the cache would pull in rosidl, and nothing here 
 
 _LOG = logging.getLogger(__name__)
 
-__all__ = ["HEARTBEAT_FRAME", "SseBroadcaster", "SseClient", "event_frame"]
+__all__ = ["HEARTBEAT_FRAME", "HEARTBEAT_S", "SseBroadcaster", "SseClient", "event_frame"]
 
-# A comment frame. Proxies and load balancers idle out a connection that says nothing, and an
-# HMI watching a quiet robot can otherwise go minutes without an event.
+# A comment frame, and how long a stream may say nothing before one is sent. Proxies and load
+# balancers idle out a connection that says nothing, and an HMI watching a quiet robot can
+# otherwise go minutes without an event.
+#
+# Both live here rather than beside the route that writes them, because the console manifest
+# advertises the interval too: one definition, or the manifest lies the day it becomes
+# configurable.
 HEARTBEAT_FRAME: Final = b": keepalive\n\n"
+HEARTBEAT_S: Final = 15.0
 
 # Per-client backlog, matching the per-goal stream. Not configurable: `overflow` already says
 # what should happen to a client that cannot keep up, which is the decision that matters.

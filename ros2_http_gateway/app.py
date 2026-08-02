@@ -45,7 +45,7 @@ from .runtime import (
     ServiceTimeoutError,
     ServiceUnavailableError,
 )
-from .sse import HEARTBEAT_FRAME, SseBroadcaster, SseClient
+from .sse import HEARTBEAT_FRAME, HEARTBEAT_S, SseBroadcaster, SseClient
 
 _LOG = logging.getLogger(__name__)
 
@@ -68,9 +68,6 @@ _CONSOLE_ASSETS: Final = {
     "console/console.css": ("console.css", "text/css"),
     "console/console.js": ("console.js", "text/javascript"),
 }
-
-# How long a stream may say nothing before a comment frame is sent.
-_HEARTBEAT_S: Final = 15.0
 
 _SSE_HEADERS: Final = {
     "Cache-Control": "no-cache",
@@ -658,7 +655,7 @@ async def _frames(broadcaster: SseBroadcaster, client: SseClient) -> AsyncIterat
             yield frame
         while True:
             try:
-                item = await asyncio.wait_for(client.queue.get(), _HEARTBEAT_S)
+                item = await asyncio.wait_for(client.queue.get(), HEARTBEAT_S)
             except asyncio.TimeoutError:
                 yield HEARTBEAT_FRAME
                 continue

@@ -489,6 +489,9 @@ async def test_the_audit_hint_matches_what_the_gateway_writes(
     record back -- it reproduces the guard's own rules instead. That only stays true if something
     compares the two, which is this. `console.js` keeps the derivation in `auditHint`; the
     expectations below are that function's contract, stated in Python.
+
+    Do not simplify this away. It and `test_the_console_predicts_the_gateways_gate_decision` are
+    the fence around two deliberate reimplementations of server-side rules in JavaScript.
     """
     audit_path: Path = served[2]
     manifest = await manifest_for(gateway, OPERATOR_TOKEN)
@@ -564,3 +567,85 @@ async def test_a_gate_refusal_is_audited_as_a_denial_with_its_message(
             assert record["reason"] == response.json()["message"]
             return
     raise AssertionError("the gate refusal was not audited")
+
+
+# --------------------------------------------------------------------------------------
+# the one reference the manifest does not filter
+# --------------------------------------------------------------------------------------
+
+
+def gated_document() -> dict[str, Any]:
+    """A gate whose state endpoint the caller of the gated endpoint cannot read."""
+    base = document()
+    base["endpoints"]["/hidden/state"] = {
+        "topic": STATE_TOPIC,
+        "type": "example_interfaces/msg/String",
+        "roles": ["viewer"],
+        "stale_after_ms": 1000,
+    }
+    base["endpoints"]["/guarded/{command}"] = {
+        "service": "/gateway_test_service",
+        "type": "std_srvs/srv/Trigger",
+        "roles": ["operator"],
+        "preconditions": [
+            {"state_endpoint": "/hidden/state", "field": "data", "allow": {"go": ["IDLE"]}}
+        ],
+    }
+    base["sse"] = {"include": ["/mission/status"]}
+    return base
+
+
+async def test_a_precondition_still_names_a_state_endpoint_the_caller_cannot_read(
+    tmp_path: Path,
+) -> None:
+    """The deliberate exception to the filtering, and the reason it is deliberate.
+
+    A caller entitled to use a gated endpoint is entitled to know what gates it -- and the path is
+    not withheld anywhere else: the policy engine puts it in the refusal message that same caller
+    receives when the gate fires. Filtering it here would hide in one place what the gateway
+    volunteers in another. `test_a_gate_that_cannot_be_trusted_reads_as_blocked` covers the console
+    side, which renders such a gate as blocked without needing to read it.
+    """
+    resolved = resolve(load_config(write_config(tmp_path, gated_document())))
+    runtime = RosRuntime(resolved)
+    runtime.start()
+    audit = AuditLogger(AuditConfig(sink="stderr", path=None))
+    await audit.start()
+    try:
+        app = build_app(resolved, runtime, audit, StaticTokenAuthenticator(resolved.config.tokens))
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        ) as client:
+            manifest = dict(
+                (
+                    await client.get(f"{BASE}/console/manifest", headers=bearer(OPERATOR_TOKEN))
+                ).json()
+            )
+            paths = {entry["path"] for entry in manifest["endpoints"]}
+            assert "/guarded/{command}" in paths, "the operator may call it"
+            assert "/hidden/state" not in paths, "but may not read what gates it"
+
+            gated = next(e for e in manifest["endpoints"] if e["path"] == "/guarded/{command}")
+            (precondition,) = gated["preconditions"]
+            assert precondition["state_endpoint"] == "/hidden/state"
+
+            # The disclosure that makes withholding it pointless: the refusal says so itself.
+            refusal = await client.post(
+                f"{BASE}/guarded/go", json={}, headers=bearer(OPERATOR_TOKEN)
+            )
+            body = refusal.json()
+            assert body["error_code"] == "PRECONDITION_FAILED"
+            assert "/hidden/state" in body["message"], body
+    finally:
+        await audit.stop()
+        runtime.stop()
+
+
+async def test_the_manifest_advertises_the_heartbeat_the_gateway_actually_sends(
+    gateway: httpx.AsyncClient,
+) -> None:
+    """One definition of the interval, so the manifest cannot drift from the stream."""
+    from ros2_http_gateway.sse import HEARTBEAT_S
+
+    manifest = await manifest_for(gateway, OPERATOR_TOKEN)
+    assert manifest["sse"]["heartbeat_s"] == HEARTBEAT_S

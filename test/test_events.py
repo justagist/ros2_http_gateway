@@ -457,7 +457,8 @@ async def test_a_quiet_stream_is_kept_alive_with_a_comment_frame(
     gateway: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Proxies idle out a connection that says nothing, and a quiet robot says nothing."""
-    monkeypatch.setattr("ros2_http_gateway.app._HEARTBEAT_S", 0.05)
+    # Patched where the route reads it, not where it is defined: app.py imported the value.
+    monkeypatch.setattr("ros2_http_gateway.app.HEARTBEAT_S", 0.05)
     stream = await gateway.stream()
     try:
         frames = await stream.take(3)

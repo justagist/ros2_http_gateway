@@ -363,6 +363,12 @@ def test_an_unbounded_endpoint_never_goes_stale(results: dict[str, Any]) -> None
 
 @node
 def test_the_console_predicts_the_gateways_gate_decision(results: dict[str, Any]) -> None:
+    """`gateVerdict` reimplements the policy engine's rules in JavaScript, so it can drift.
+
+    This is the fence around that: do not simplify it away. Together with
+    `test_the_audit_hint_matches_what_the_gateway_writes`, which closes the same loop against the
+    running gateway, it is the only thing keeping the console's predictions honest.
+    """
     verdicts = {check["label"]: check["verdict"] for check in results["gates"]}
     assert verdicts["permitted state"] == "allowed"
     assert verdicts["forbidden state"] == "blocked"

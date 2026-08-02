@@ -15,6 +15,14 @@ relied on to hide an endpoint's existence.
 Schemas are referenced rather than embedded: a component key plus the document URL, so the
 console fetches the OpenAPI document once and resolves pointers into it. Embedding them would
 duplicate every nested type per endpoint.
+
+**One deliberate exception to the filtering**: a precondition keeps naming its state endpoint even
+when the caller cannot read it. That endpoint's path is not withheld anywhere else -- the policy
+engine puts it in the refusal message the caller gets when the gate fires ("<endpoint> is stale
+(...)", "<endpoint> has received nothing yet") -- so removing it here would hide in one place what
+the gateway volunteers in another the moment the gate matters. A caller entitled to use a gated
+endpoint is also entitled to know what gates it. The console handles the unreadable case on its
+own side by rendering such a gate as blocked.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from .auth import Identity
 from .config import EndpointConfig, Precondition
 from .resolve import ResolvedConfig, ResolvedEndpoint
 from .schemagen import Direction, schema_ref_name
+from .sse import HEARTBEAT_S
 
 __all__ = ["build_manifest", "endpoint_kind"]
 
@@ -60,15 +69,16 @@ def build_manifest(
     }
     visible = {endpoint["path"] for endpoint in endpoints}
     if config.sse is not None and streamed & visible:
-        # Filtered against what this caller can see, not against the configured list: the stream
-        # itself filters per client, so naming a member they will never receive would both lie
-        # and disclose an endpoint the rest of this manifest deliberately omits.
+        # Filtered against what this caller can see, not against the configured list, because the
+        # stream itself filters per client: naming a member they will never receive would
+        # misdescribe what the connection delivers. That is a correctness reason rather than a
+        # disclosure one -- see the note about preconditions in the module docstring.
         manifest["sse"] = {
             "url": f"{base}{config.sse.path}",
             "include": [key for key in config.sse.include if key in visible],
             "overflow": config.sse.overflow,
             "max_clients": config.sse.max_clients,
-            "heartbeat_s": 15,
+            "heartbeat_s": HEARTBEAT_S,
         }
     return manifest
 
@@ -130,7 +140,11 @@ def _key(message_type: Any, direction: Direction) -> str:
 
 
 def _precondition(item: Precondition) -> dict[str, Any]:
-    """Enough for a console to show the gate's live state beside the button it guards."""
+    """Enough for a console to show the gate's live state beside the button it guards.
+
+    ``state_endpoint`` is kept even when this caller cannot read it: see the module docstring for
+    why that is the one reference this manifest does not filter.
+    """
     return {
         "state_endpoint": item.state_endpoint,
         "field": ".".join(item.field_path),
