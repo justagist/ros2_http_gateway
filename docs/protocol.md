@@ -252,6 +252,12 @@ drains will therefore show gaps in `seq`, exactly as a client polling the GET ro
 samples between polls; this is a latest-value gateway, not a message bus. If you need every
 message, subscribe to the topic in ROS.
 
+Immediately after the snapshot, and only there, a client may receive one frame repeating a
+snapshot's `seq` or carrying a lower one: subscription happens before the snapshot is built, so
+a sample landing in between appears in both. `seq` disambiguates, and the alternative ordering
+would drop that sample instead of duplicating it. Treat `seq` as the authority on recency
+rather than arrival order.
+
 A client that cannot keep up is handled per `sse.overflow`: `drop_oldest` (default) discards
 its **oldest** queued events, so the newest state always arrives, while `disconnect` closes it.
 One slow client never slows a fast one.

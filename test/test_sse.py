@@ -133,6 +133,23 @@ async def test_one_sample_is_published_once_however_often_the_loop_is_woken() ->
     assert drain(client) == [event_frame("/a", b'{"seq":1}')]
 
 
+async def test_a_sample_landing_in_the_connect_window_appears_twice() -> None:
+    """The documented one-frame anomaly: subscription precedes the snapshot, so both carry it.
+
+    Pinned rather than fixed. Subscribing after the snapshot would lose the sample instead of
+    repeating it, which is the worse failure for a latest-value stream.
+    """
+    broadcaster, caches = build()
+    client = broadcaster.subscribe(ALL)
+    assert client is not None
+
+    caches["/a"].offer(b'{"seq":1}')
+    await asyncio.sleep(0)
+
+    assert next(iter(broadcaster.snapshot(client))) == event_frame("/a", b'{"seq":1}')
+    assert drain(client) == [event_frame("/a", b'{"seq":1}')], "the queued copy is still there"
+
+
 async def test_nothing_is_scheduled_while_nobody_is_connected() -> None:
     """An idle stream must cost the ROS thread one branch, not a loop wakeup per message."""
     broadcaster, caches = build()

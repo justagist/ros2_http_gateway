@@ -152,6 +152,10 @@ class Harness:
         self.broadcaster = app.state.sse
         self._audit_path = audit_path
 
+    def audit_text(self) -> str:
+        """The raw audit file, for asserting on what is absent from it."""
+        return self._audit_path.read_text() if self._audit_path.exists() else ""
+
     def audit(self) -> list[dict[str, Any]]:
         if not self._audit_path.exists():
             return []
@@ -172,7 +176,11 @@ class Harness:
         return await Stream(self.app, f"/api/v1/events{query}", token).start()
 
     async def connect(self, token: str | None = OPERATOR_TOKEN) -> httpx.Response:
-        """A one-shot request to the stream route, for the answers that are not a stream."""
+        """A one-shot request to the stream route, for the answers that are *not* a stream.
+
+        Only for the refusals. httpx buffers a whole response, so calling this with credentials
+        that are accepted hangs on a stream that never ends.
+        """
         return await self.client.get(f"{BASE}/events", headers=_headers(token))
 
     async def get(self, path: str, token: str = OPERATOR_TOKEN) -> httpx.Response:
@@ -377,6 +385,29 @@ async def test_a_header_authenticated_stream_is_not_marked_as_a_query_credential
     await gateway.settle()
     (entry,) = gateway.audit()
     assert "credential" not in entry
+
+
+async def test_a_query_token_never_reaches_the_audit_file(gateway: Harness) -> None:
+    """The direct negative: no field of any record may contain the credential.
+
+    ``credential: "query"`` marks the weaker channel, and the record carries ``url.path`` rather
+    than the full URL. This asserts the consequence rather than the mechanism, so a later change
+    to either cannot quietly put a token in the audit file.
+    """
+    for query in (f"?access_token={OPERATOR_TOKEN}", f"?access_token={OPERATOR_TOKEN}&other=1"):
+        stream = await gateway.stream(token=None, query=query)
+        try:
+            await stream.take(1)
+        finally:
+            await stream.close()
+    await gateway.settle()
+
+    records = gateway.audit()
+    assert records, "nothing was audited, so this asserts nothing"
+    for entry in records:
+        for field, value in entry.items():
+            assert OPERATOR_TOKEN not in str(value), f"the token leaked into {field!r}"
+    assert OPERATOR_TOKEN not in gateway.audit_text()
 
 
 async def test_a_bad_query_token_is_still_a_401(gateway: Harness) -> None:

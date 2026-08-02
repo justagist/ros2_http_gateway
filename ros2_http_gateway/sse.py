@@ -11,6 +11,12 @@ Only the newest sample is streamed. A topic published faster than the loop drain
 therefore shows gaps in ``seq``, exactly as a client polling the GET route would miss samples
 between polls. This is a latest-value gateway, not a message bus.
 
+One anomaly at connect, once per connection: a client is subscribed before its snapshot is
+built, so a sample landing in between is both fanned into its queue and reflected in the
+snapshot. The frame after the snapshot may therefore repeat its ``seq`` or carry a lower one.
+``seq`` disambiguates. Subscribing after the snapshot instead would trade that duplicate for a
+lost sample, which is the worse failure for a latest-value stream.
+
 Each client sees only the endpoints its own roles permit, so including a restricted endpoint in
 the stream cannot hand it to a caller who may not GET it.
 """
@@ -168,6 +174,11 @@ class SseBroadcaster:
         sample = cache.latest
         if sample is None or sample.seq == self._published.get(key):
             return
+        # From the sample read above, not from whatever response_body finds a moment later: a
+        # sample landing between these lines is carried by the frame but not recorded here, so
+        # the next wakeup re-sends it. Recording the newer seq instead would suppress that
+        # wakeup and lose a sample outright. Under-record for a possible duplicate rather than
+        # over-record for a possible loss -- the same trade the connect window makes.
         self._published[key] = sample.seq
 
         frame = event_frame(key, cache.response_body())
