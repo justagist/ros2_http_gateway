@@ -27,6 +27,7 @@ from gateway_fixtures import (
     Talker,
     resolved_config,
 )
+from rclpy.callback_groups import ReentrantCallbackGroup
 from std_srvs.srv import Trigger
 
 from ros2_http_gateway.app import build_app
@@ -54,8 +55,12 @@ class Server:
         self.trigger_success = True
         self.trigger_message = "done"
 
-        self._node.create_service(AddTwoInts, ADD_SERVICE, self._add)
-        self._node.create_service(Trigger, TRIGGER_SERVICE, self._trigger)
+        # Reentrant: with the node's default mutually exclusive group, the deliberately slow
+        # `_add` below blocks every other call on this node, measured at 859ms for a Trigger
+        # issued during a 1s Add. Abandoned callbacks then outlive the test that made them.
+        group = ReentrantCallbackGroup()
+        self._node.create_service(AddTwoInts, ADD_SERVICE, self._add, callback_group=group)
+        self._node.create_service(Trigger, TRIGGER_SERVICE, self._trigger, callback_group=group)
         self._executor = rclpy.executors.MultiThreadedExecutor(context=self._context)
         self._executor.add_node(self._node)
         self._stopping = False
@@ -200,6 +205,7 @@ def servers() -> Any:
 async def gateway(tmp_path: Path, servers: Server) -> AsyncIterator[Harness]:
     harness, close = await build(tmp_path, endpoints=endpoints())
     _wait_for_service(harness, "/add")
+    _wait_for_service(harness, "/mission/{command}")
     try:
         yield harness
     finally:
@@ -327,7 +333,7 @@ async def test_a_service_returning_false_is_still_a_successful_call(
     finally:
         servers.trigger_success = True
 
-    assert payload["success"] is True, "the call itself succeeded"
+    assert payload["success"] is True, f"the call itself succeeded: {payload}"
     assert payload["error_code"] is None
     assert payload["response"] == {"success": False, "message": "not while moving"}
 
@@ -467,9 +473,13 @@ async def test_a_stale_state_refuses_the_call(tmp_path: Path, servers: Server) -
     harness, close = await build(tmp_path, endpoints=guarded)
     talker = Talker()
     try:
+        # Discovery first, then the sample: waiting for the service afterwards would spend the
+        # staleness budget on it and refuse the call this half of the test expects to succeed.
+        _wait_for_service(harness, "/mission/{command}")
         cache = harness.runtime.caches["/mission/status"]
         assert talker.publish_until("IDLE", lambda: cache.latest is not None)
-        assert (await harness.post("/mission/start")).json()["success"] is True
+        fresh = (await harness.post("/mission/start")).json()
+        assert fresh["success"] is True, fresh
 
         time.sleep(0.4)  # the publisher has stopped and the threshold has passed
         payload = (await harness.post("/mission/start")).json()
