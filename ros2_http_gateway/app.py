@@ -42,6 +42,7 @@ from .runtime import (
     ServiceTimeoutError,
     ServiceUnavailableError,
 )
+from .sse import HEARTBEAT_FRAME, SseBroadcaster, SseClient
 
 _LOG = logging.getLogger(__name__)
 
@@ -49,6 +50,9 @@ __all__ = ["build_app"]
 
 _JSON: Final = "application/json"
 _ORJSON_OPTS: Final = orjson.OPT_SERIALIZE_NUMPY
+
+# How long a stream may say nothing before a comment frame is sent.
+_HEARTBEAT_S: Final = 15.0
 
 _SSE_HEADERS: Final = {
     "Cache-Control": "no-cache",
@@ -116,8 +120,38 @@ def build_app(
     base = resolved.config.http.base_path
     routes = [Route(f"{base}/health", _health(resolved, runtime), methods=["GET"])]
     routes.extend(_endpoint_routes(resolved, runtime, audit, authenticator, policy, goals, base))
+
+    broadcaster: SseBroadcaster | None = None
+    if resolved.config.sse is not None:
+        sse = resolved.config.sse
+        broadcaster = SseBroadcaster(
+            runtime.caches,
+            sse.include,
+            overflow=sse.overflow,
+            max_clients=sse.max_clients,
+        )
+        roles = frozenset[str]().union(
+            *(resolved.endpoints[key].config.roles for key in sse.include)
+        )
+        routes.append(
+            Route(
+                f"{base}{sse.path}",
+                _guard(
+                    _events(broadcaster, resolved),
+                    roles,
+                    sse.path,
+                    audit,
+                    authenticator,
+                    PolicyEngine({}),
+                    allow_query_token=True,
+                ),
+                methods=["GET"],
+            )
+        )
+
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.goals = goals
+    app.state.sse = broadcaster
     return app
 
 
@@ -144,7 +178,9 @@ def _endpoint_routes(
             yield from _action_routes(endpoint, runtime, audit, authenticator, policy, goals, base)
             continue
         handler = _endpoint_handler(endpoint, runtime)
-        guarded = _guard(handler, endpoint, audit, authenticator, policy)
+        guarded = _guard(
+            handler, endpoint.config.roles, endpoint.config.path, audit, authenticator, policy
+        )
         yield Route(f"{base}{path}", guarded, methods=[endpoint.config.method])
 
 
@@ -166,7 +202,7 @@ def _action_routes(
     empty = PolicyEngine({})
 
     def guard(handler: Handler, with_policy: PolicyEngine) -> Handler:
-        return _guard(handler, endpoint, audit, authenticator, with_policy)
+        return _guard(handler, endpoint.config.roles, path, audit, authenticator, with_policy)
 
     yield Route(
         f"{base}{path}", guard(_goal_submit(endpoint, runtime, goals), policy), methods=["POST"]
@@ -203,10 +239,13 @@ def _health(resolved: ResolvedConfig, runtime: RosRuntime) -> Handler:
 
 def _guard(
     handler: Handler,
-    endpoint: ResolvedEndpoint,
+    required: frozenset[str],
+    policy_path: str,
     audit: AuditLogger,
     authenticator: Authenticator,
     policy: PolicyEngine,
+    *,
+    allow_query_token: bool = False,
 ) -> Handler:
     """Wrap a handler with authentication, the role check, policy, timing and audit.
 
@@ -216,16 +255,22 @@ def _guard(
 
     One record per request reaching a configured route. A request matching no route is
     Starlette's 404 and is not audited -- a deliberate gap recorded in docs/security.md.
+
+    ``allow_query_token`` is for the SSE route alone: browser ``EventSource`` cannot set
+    headers. The record says which way the credential arrived, never what it was.
     """
-    required = endpoint.config.roles
 
     async def guarded(request: Request) -> Response:
         started = time.perf_counter()
         identity: Identity | None = None
         denial: str | None = None
+        credential: str | None = None
         response: Response
 
         token = bearer_token(request.headers.get("authorization"))
+        if token is None and allow_query_token:
+            token = request.query_params.get("access_token") or None
+            credential = "query" if token else None
         if token is None:
             denial, response = NO_CREDENTIAL, _error(401, "UNAUTHENTICATED", "missing bearer token")
         else:
@@ -244,14 +289,13 @@ def _guard(
                         f"this endpoint requires one of: {', '.join(sorted(required))}",
                     ),
                 )
-            elif (
-                refusal := policy.evaluate(endpoint.config.path, request.path_params)
-            ) is not None:
+            elif (refusal := policy.evaluate(policy_path, request.path_params)) is not None:
                 denial, response = (
                     refusal,
                     _envelope(200, "PRECONDITION_FAILED", refusal),
                 )
             else:
+                request.state.identity = identity
                 try:
                     response = await handler(request)
                 except Exception:
@@ -270,6 +314,7 @@ def _guard(
             latency_ms=(time.perf_counter() - started) * 1000.0,
             user=identity.user if identity else None,
             roles=identity.roles if identity else None,
+            credential=credential,
         )
         return response
 
@@ -523,6 +568,54 @@ def _goal_stream(endpoint: ResolvedEndpoint, goals: GoalRegistry) -> Handler:
 
 async def _single_frame(frame: bytes) -> AsyncIterator[bytes]:
     yield frame
+
+
+# --------------------------------------------------------------------------------------
+# the global event stream
+# --------------------------------------------------------------------------------------
+
+
+def _events(broadcaster: SseBroadcaster, resolved: ResolvedConfig) -> Handler:
+    """GET the global stream: a snapshot of every readable endpoint, then deltas.
+
+    Filtered per client by role. The stream is one connection carrying several endpoints, so
+    without that a viewer could read an operator-only endpoint here that they cannot GET.
+    """
+    readable = {key: resolved.endpoints[key].config.roles for key in broadcaster.include}
+
+    async def events(request: Request) -> Response:
+        identity = request.state.identity
+        allowed = frozenset(key for key, roles in readable.items() if identity.may(roles))
+        client = broadcaster.subscribe(allowed)
+        if client is None:
+            return _error(
+                503,
+                "TOO_MANY_CLIENTS",
+                "the event stream is at its configured client limit",
+            )
+        return StreamingResponse(
+            _frames(broadcaster, client), media_type="text/event-stream", headers=_SSE_HEADERS
+        )
+
+    return events
+
+
+async def _frames(broadcaster: SseBroadcaster, client: SseClient) -> AsyncIterator[bytes]:
+    """Snapshot, then queued events, with a comment frame whenever the stream goes quiet."""
+    try:
+        for frame in broadcaster.snapshot(client):
+            yield frame
+        while True:
+            try:
+                item = await asyncio.wait_for(client.queue.get(), _HEARTBEAT_S)
+            except asyncio.TimeoutError:
+                yield HEARTBEAT_FRAME
+                continue
+            if item is None:  # the sentinel written by close() or an overflow disconnect
+                return
+            yield item
+    finally:
+        broadcaster.unsubscribe(client)
 
 
 def _goal_cancel(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalRegistry) -> Handler:

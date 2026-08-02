@@ -5,6 +5,8 @@ queue flushed. Cleaning up after ``server.run()`` returns instead silently does 
 uvicorn restores the default signal handler and re-raises the captured signal as ``run()``
 unwinds, so the process dies inside that call. The ``finally`` below is an idempotent safety
 net for the paths that do return normally.
+
+Event streams are ended earlier still, in :class:`_Server`, for the reason given there.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import socket
 from collections.abc import AsyncIterator
 from typing import Final
 
@@ -23,6 +26,7 @@ from .audit import AuditLogger
 from .auth import StaticTokenAuthenticator
 from .resolve import ResolvedConfig
 from .runtime import RosRuntime
+from .sse import SseBroadcaster
 
 _LOG = logging.getLogger(__name__)
 
@@ -35,6 +39,26 @@ _HTTP: Final = "httptools"
 
 # 128 + SIGINT, the shell convention for "terminated by Ctrl-C".
 _EXIT_INTERRUPTED: Final = 130
+
+
+class _Server(uvicorn.Server):
+    """uvicorn, plus ending the event streams as shutdown begins.
+
+    An SSE response is an in-flight request that never completes on its own, and uvicorn's
+    graceful shutdown waits for in-flight requests *before* it runs the lifespan shutdown. So a
+    single connected stream would hold the process open until the client hung up: `SIGTERM`
+    would appear to be ignored. Closing them here, ahead of that wait, is the only point early
+    enough -- the lifespan is already too late.
+    """
+
+    def __init__(self, config: uvicorn.Config, broadcaster: SseBroadcaster | None) -> None:
+        super().__init__(config)
+        self._broadcaster = broadcaster
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        if self._broadcaster is not None:
+            self._broadcaster.close()
+        await super().shutdown(sockets)
 
 
 def serve(resolved: ResolvedConfig) -> int:
@@ -52,7 +76,7 @@ def serve(resolved: ResolvedConfig) -> int:
             http.port,
             http.base_path or "/",
         )
-        server = uvicorn.Server(
+        server = _Server(
             uvicorn.Config(
                 app,
                 host=http.bind,
@@ -64,7 +88,8 @@ def serve(resolved: ResolvedConfig) -> int:
                 # worth the write.
                 access_log=False,
                 log_config=None,
-            )
+            ),
+            app.state.sse,
         )
         try:
             server.run()

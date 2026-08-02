@@ -88,8 +88,13 @@ class AuditLogger:
         roles: frozenset[str] | None = None,
         reason: str | None = None,
         outcome: str = "ok",
+        credential: str | None = None,
     ) -> None:
-        """Queue one audit record. Never blocks, never raises."""
+        """Queue one audit record. Never blocks, never raises.
+
+        ``credential`` names how the token arrived when that is not the Authorization header,
+        which today means the SSE route's ``?access_token=``. Never the token itself.
+        """
         entry: dict[str, Any] = {
             # timezone.utc, not datetime.UTC: the latter is 3.11+ and Humble ships 3.10.
             "ts": datetime.now(timezone.utc)
@@ -105,6 +110,8 @@ class AuditLogger:
             "outcome": outcome,
             "latency_ms": round(latency_ms, 3),
         }
+        if credential is not None:
+            entry["credential"] = credential
         # Cleared only once a record carrying it is queued: clearing on attach would lose the
         # tally whenever that record is itself the one dropped.
         if self._dropped:

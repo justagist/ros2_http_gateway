@@ -28,6 +28,10 @@ will fail the same way.
 | 403 | Valid token whose roles do not include one of the endpoint's `roles` |
 | 404 | Unknown route, or an unknown or evicted `goal_id` |
 
+**503: a capacity limit was reached.** Also never reached ROS, but unlike a 4xx the identical
+request may succeed later: `PUBLISH_QUEUE_FULL` when the ROS side is not draining published
+messages fast enough, `TOO_MANY_CLIENTS` when the event stream is at `sse.max_clients`.
+
 **200: it did, and this is the outcome.** The call was authorised and well-formed. Success
 and failure are both reported in the body, because "the service returned false" and "the
 service timed out" are results, not protocol errors.
@@ -225,17 +229,38 @@ event: /mission/status
 data: {"data":{...},"stamp":1780000000.1,"seq":12,"stale":false}
 ```
 
-The event name is the endpoint key and `data` is byte-identical to that endpoint's GET body.
-On connect, one snapshot per included endpoint, then deltas. A comment frame every 15
-seconds keeps proxies from idling the connection out. Past `sse.max_clients` the route
-returns 503.
+The event name is the endpoint key and `data` is byte-identical to that endpoint's GET body:
+the same memoised encoding backs both, so one parser serves both routes.
+
+On connect, one snapshot per included endpoint, then deltas. Endpoints that have received
+nothing yet are in the snapshot too, with the same `"data": null` body a GET would return, so
+a client learns the whole endpoint set up front. A comment frame every 15 seconds keeps
+proxies from idling the connection out. Past `sse.max_clients` the route answers 503 with
+`TOO_MANY_CLIENTS`.
+
+**Each client sees only the endpoints its own roles permit.** One connection carries several
+endpoints, so filtering is per client rather than per stream: including a restricted endpoint
+cannot hand it to a caller who may not GET it. A token holding none of the included endpoints'
+roles gets 403 at connect.
+
+Browser `EventSource` cannot set headers, so this route also accepts `?access_token=`. It is
+the only route that does, and the audit record for such a request carries `"credential":
+"query"` -- the query string itself is never logged.
+
+Only the newest sample of an endpoint is streamed. A topic published faster than the loop
+drains will therefore show gaps in `seq`, exactly as a client polling the GET route would miss
+samples between polls; this is a latest-value gateway, not a message bus. If you need every
+message, subscribe to the topic in ROS.
 
 A client that cannot keep up is handled per `sse.overflow`: `drop_oldest` (default) discards
-its queued events, which shows up as gaps in `seq`, while `disconnect` closes it. One slow
-client never slows a fast one.
+its **oldest** queued events, so the newest state always arrives, while `disconnect` closes it.
+One slow client never slows a fast one.
 
 Action feedback is not carried here; it is streamed per goal from
 `/pick/{goal_id}/stream`.
+
+`SIGTERM` ends every open stream before the server waits for in-flight requests, so a
+connected stream cannot hold shutdown open.
 
 ## Process lifecycle
 
@@ -246,7 +271,11 @@ without a traceback; `SIGTERM` propagates as usual, which is what an init system
 ## Audit
 
 One JSON line per authenticated request: timestamp, user, roles, method, path, decision and
-its reason, outcome, latency in milliseconds. Never tokens, never request bodies.
+its reason, outcome, latency in milliseconds. Never tokens, never request bodies, never the
+query string. A `credential` field appears only when the token did not arrive in the
+`Authorization` header, which today means the stream's `?access_token=`.
+
+For a stream the latency is the time to accept the connection, not its lifetime.
 
 ## OpenAPI
 

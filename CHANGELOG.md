@@ -8,6 +8,28 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- The global event stream is served at `sse.path` (default `/api/v1/events`): one snapshot per
+  included endpoint on connect, then deltas. `data` is byte-identical to the endpoint's GET
+  body, because the same memoised encoding backs both.
+- Each client sees only the endpoints its own roles permit. One connection carries several
+  endpoints, so filtering is per client; a token holding none of their roles gets 403. There is
+  no `roles` key on `sse` -- adding an endpoint to `include` cannot widen who may read it.
+- A sample is framed once on the loop and the same bytes object is handed to every client, so N
+  listeners cost N queue appends. The ROS thread only flags the endpoint and wakes the loop, and
+  does neither while nobody is connected.
+- `sse.overflow` handles a client that stops keeping up: `drop_oldest` (default) discards its
+  oldest queued events so the newest state still arrives, `disconnect` closes it. One slow
+  client never slows a fast one. Past `sse.max_clients` the route answers 503 with
+  `TOO_MANY_CLIENTS`.
+- A comment frame every 15 seconds, per client and only while the stream is quiet, so a proxy
+  cannot idle out a connection to a quiet robot.
+- The stream accepts `?access_token=` because browser `EventSource` cannot set headers. It is
+  the only route that does, and its audit record carries `"credential": "query"`; the query
+  string is never logged.
+- `SIGTERM` ends every open stream before uvicorn waits for in-flight requests. Without that a
+  single connected stream would hold the process open until the client hung up, since a stream
+  is an in-flight request that never completes on its own.
+
 - Action endpoints are served, with all four routes: `POST` submits a goal and answers 202 with
   its id, `GET` reads status, result and newest feedback, `GET .../stream` streams feedback and
   then one terminal event before closing, and `DELETE` requests cancellation.

@@ -171,6 +171,28 @@ def test_a_signal_shuts_down_cleanly_and_destroys_the_node(
     )
 
 
+def test_an_open_event_stream_does_not_hold_shutdown_open(tmp_path: Path) -> None:
+    """An SSE response is an in-flight request that never completes on its own.
+
+    uvicorn's graceful shutdown waits for in-flight requests *before* it runs the lifespan
+    shutdown, so one connected stream would make SIGTERM look ignored until the client hung up.
+    Only a real server shows this; the ASGI-level tests cannot.
+    """
+    with running(tmp_path, EXECUTORS[0], sse={"include": ["/mission/status"]}) as gateway:
+        request = urllib.request.Request(gateway.url("/events"))
+        request.add_header("Authorization", f"Bearer {OPERATOR_TOKEN}")
+        with urllib.request.urlopen(request, timeout=10) as stream:
+            assert stream.status == 200
+            assert stream.read(1), "the snapshot never arrived"
+
+            # Raises rather than returning if the process outlives the timeout, which is the
+            # whole point: the stream is still open and unread at this moment.
+            gateway.signal_and_wait(signal.SIGTERM, timeout=20.0)
+
+    output = gateway.collect()
+    assert "ROS runtime stopped" in output, f"the node was never destroyed:\n{output}"
+
+
 @pytest.mark.bench
 def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
     """Informational soak: a 1 kHz subscription with no HTTP traffic.

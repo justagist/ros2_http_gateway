@@ -228,6 +228,15 @@ sse:
 `include` is required and accepts topic `GET` endpoints only. Action feedback is streamed
 per goal from `/<action>/{goal_id}/stream`, not through this global stream.
 
+There is no `roles` key: the stream's authorisation comes from the endpoints it carries. A
+client must hold a role for at least one of them to connect, and then sees exactly the
+endpoints its roles permit. Adding an endpoint to `include` therefore cannot widen who can
+read it.
+
+`overflow` decides what happens to a client that stops keeping up: `drop_oldest` discards its
+oldest queued events so the newest state still arrives, `disconnect` closes the connection.
+The per-client backlog itself is fixed at 64 frames; `overflow` is the decision that matters.
+
 ## `http`
 
 ```yaml

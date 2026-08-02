@@ -72,6 +72,13 @@ Not a design goal, but the obvious footguns are bounded:
 - The publish queue is bounded; a client publishing faster than ROS drains gets 503 rather
   than growing memory or blocking the event loop.
 - SSE has a `max_clients` limit and per-client bounded queues.
+- The event stream filters per client by role, so it cannot become a way to read an endpoint
+  the caller may not GET.
+- The stream accepts `?access_token=` because browser `EventSource` cannot set headers. This is
+  the one place a credential can appear in a URL, so it can also appear in the access log of
+  any proxy in front of the gateway. The gateway logs the path without its query string and
+  marks the record `"credential": "query"`; if that trade is unacceptable, do not configure an
+  `sse` block, or terminate EventSource in your own front end and use the header.
 
 There is no rate limiting and no request size limit. Put both in the reverse proxy.
 

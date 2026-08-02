@@ -57,6 +57,7 @@ class TopicCache:
         "_stale_after_s",
         "_to_dict",
         "message_type",
+        "on_offer",
     )
 
     def __init__(
@@ -74,6 +75,7 @@ class TopicCache:
         self._encoded_seq = -1
         self._decoded: dict[str, Any] = {}
         self._decoded_seq = -1
+        self.on_offer: Callable[[], None] | None = None
 
     # ---------------------------------------------------------------- ROS thread side
 
@@ -82,9 +84,14 @@ class TopicCache:
 
         Lock-free: each subscription has its own mutually exclusive callback group, so
         callbacks for one topic never overlap.
+
+        ``on_offer``, if set, is called here and so also runs on the ROS thread. The SSE
+        broadcaster uses it to wake the loop; it must not touch the loop-confined methods.
         """
         self._seq += 1
         self._sample = Sample(raw, self._seq, time.time(), time.monotonic())
+        if self.on_offer is not None:
+            self.on_offer()
 
     # ------------------------------------------------------------- asyncio side
 
