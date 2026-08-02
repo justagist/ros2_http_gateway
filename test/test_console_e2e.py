@@ -144,10 +144,23 @@ def _wait_for(
     raise AssertionError(f"{url} never became ready")
 
 
+# Watching it happen, for when a test fails in a way an assertion cannot explain. All optional and
+# all off by default, so a plain run stays headless and fast.
+#
+#   GATEWAY_E2E_HEADED=1    show a real browser window (needs a display)
+#   GATEWAY_E2E_SLOWMO=400  pause this many ms between actions, so a human can follow
+#   GATEWAY_E2E_VIDEO=dir   record one webm per test
+#   GATEWAY_E2E_TRACE=dir   record a trace per test, for `playwright show-trace`
+HEADED = os.environ.get("GATEWAY_E2E_HEADED") == "1"
+SLOWMO_MS = float(os.environ.get("GATEWAY_E2E_SLOWMO", "0"))
+VIDEO_DIR = os.environ.get("GATEWAY_E2E_VIDEO")
+TRACE_DIR = os.environ.get("GATEWAY_E2E_TRACE")
+
+
 @pytest.fixture(scope="module")
 def browser() -> Iterator[Any]:
     with sync_playwright() as playwright:
-        instance = playwright.chromium.launch()
+        instance = playwright.chromium.launch(headless=not HEADED, slow_mo=SLOWMO_MS)
         try:
             yield instance
         finally:
@@ -155,9 +168,15 @@ def browser() -> Iterator[Any]:
 
 
 @pytest.fixture
-def console(browser: Any, demo: Demo) -> Iterator[Any]:
+def console(browser: Any, demo: Demo, request: pytest.FixtureRequest) -> Iterator[Any]:
     """A fresh page with a clean local storage, so the wallet starts empty every test."""
-    context = browser.new_context()
+    options: dict[str, Any] = {}
+    if VIDEO_DIR:
+        options["record_video_dir"] = VIDEO_DIR
+        options["record_video_size"] = {"width": 1280, "height": 900}
+    context = browser.new_context(**options)
+    if TRACE_DIR:
+        context.tracing.start(screenshots=True, snapshots=True, sources=True)
     page = context.new_page()
     failures: list[str] = []
     page.on("pageerror", lambda error: failures.append(f"uncaught: {error}"))
@@ -178,6 +197,11 @@ def console(browser: Any, demo: Demo) -> Iterator[Any]:
         # A console that renders but throws is not working, and nothing else here would notice.
         assert not failures, f"the page reported errors: {failures}"
     finally:
+        if TRACE_DIR:
+            target = Path(TRACE_DIR) / f"{request.node.name}.zip"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            context.tracing.stop(path=str(target))
+        # Videos are written only when the context closes, and are named by playwright.
         context.close()
 
 
@@ -281,19 +305,28 @@ def test_a_tile_reads_and_shows_its_countdown(console: Any) -> None:
     assert card.locator("pre.sample").inner_text().startswith("{")
 
 
-def test_a_write_round_trips_into_its_read_tile(console: Any) -> None:
+def test_a_write_round_trips_into_its_read_tile(console: Any, demo: Demo) -> None:
+    """With the demo's own publisher stopped, so the written message is the only one on the topic.
+
+    Racing it instead was flaky by construction: the demo publishes to `/chatter` twice a second,
+    so the marker survives about half a second. That passed headless and failed the moment
+    `GATEWAY_E2E_SLOWMO` put a human-visible pause between the write and the read.
+    """
     connect(console, OPERATOR)
     marker = f"e2e-{int(time.time())}"
+    demo.stop_node()
+    try:
+        write = card_for(console, "/chatter/say")
+        write.locator(".editor input").first.fill(marker)
+        write.locator("button", has_text="Publish").click()
+        write.locator(".result-line", has_text="200").wait_for()
+        assert "success" in write.locator(".result-body").inner_text()
 
-    write = card_for(console, "/chatter/say")
-    write.locator(".editor input").first.fill(marker)
-    write.locator("button", has_text="Publish").click()
-    write.locator(".result-line", has_text="200").wait_for()
-    assert "success" in write.locator(".result-body").inner_text()
-
-    read = card_for(console, "/chatter")
-    read.locator("button", has_text="GET").click()
-    read.locator("pre.sample", has_text=marker).wait_for(timeout=5000)
+        read = card_for(console, "/chatter")
+        read.locator("button", has_text="GET").click()
+        read.locator("pre.sample", has_text=marker).wait_for(timeout=10_000)
+    finally:
+        demo.start_node()
 
 
 # --------------------------------------------------------------------------------------

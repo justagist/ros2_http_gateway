@@ -156,6 +156,28 @@ so nothing about an endpoint is hardcoded.
   have written to the audit log, derived from the answer rather than read back, since the audit
   sink is deliberately not served over HTTP.
 
+### Testing the console
+
+The `e2e` suite drives it in a real browser. Deselected by default, so it needs asking for:
+
+```bash
+pip install -e '.[dev,e2e]'
+playwright install chromium          # one-time, ~115 MB
+pytest -m e2e                        # 13 tests, about 75 s
+```
+
+It starts the demo node and a gateway itself, on a free port, so nothing needs to be running first.
+To watch rather than just trust it:
+
+```bash
+GATEWAY_E2E_HEADED=1 GATEWAY_E2E_SLOWMO=400 pytest -m e2e -k gate_box   # a real window
+GATEWAY_E2E_VIDEO=/tmp/e2e pytest -m e2e                                # one webm per test
+GATEWAY_E2E_TRACE=/tmp/e2e pytest -m e2e                                # then: playwright show-trace /tmp/e2e/<test>.zip
+```
+
+`GATEWAY_E2E_HEADED=1` needs a display. The trace viewer is the better tool when something fails:
+it gives you a DOM snapshot, the network log and the console output at every step, after the fact.
+
 ## Supported versions
 
 Python 3.10+, ROS 2 Humble, Jazzy, Kilted, Lyrical and Rolling. Humble is the feature

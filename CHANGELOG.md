@@ -15,7 +15,8 @@ All notable changes to this project are documented here. Format follows
   through feedback to a result, cancel and re-cancel, TTL eviction, both stream transports and the
   heartbeat difference between them, and slow-consumer mode. Deselected by default, and playwright
   sits in its own `e2e` extra rather than in `dev` so a browserless CI leg skips the module instead
-  of failing in it.
+  of failing in it. `GATEWAY_E2E_HEADED`, `GATEWAY_E2E_SLOWMO`, `GATEWAY_E2E_VIDEO` and
+  `GATEWAY_E2E_TRACE` make a run watchable.
 - Startup checks on anything derived from config or from another layer raise instead of asserting,
   so `python -O` is a supported way to run this. The full suite passes under it.
 
