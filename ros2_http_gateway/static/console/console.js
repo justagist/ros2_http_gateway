@@ -903,6 +903,7 @@
     var body = node("pre", "", "goal-result");
     var audit = node("div", "", "audit-hint");
     var ttl = node("div", "", "goal-ttl");
+    var cancelled = node("div", "", "goal-cancel");
     var statusUrl = logic.fill(endpoint.routes.status.replace("{goal_id}", goalId), {});
     var streamUrl = logic.fill(endpoint.routes.stream.replace("{goal_id}", goalId), {});
     var cancelUrl = logic.fill(endpoint.routes.cancel.replace("{goal_id}", goalId), {});
@@ -970,15 +971,29 @@
     var cancel = button("Cancel", function () {
       return send("DELETE", cancelUrl).then(function (answer) {
         audit.textContent = auditText(answer, activeToken());
-        status.textContent =
-          answer.body && answer.body.error_code
+        // On its own line, not in `status`: the answer to a cancel request is not a goal status,
+        // and writing it there meant the very next poll overwrote it -- so a second cancel's
+        // ALREADY_TERMINAL was invisible.
+        cancelled.className = "goal-cancel outcome-" + answer.outcome;
+        cancelled.textContent =
+          "cancel: " +
+          (answer.body && answer.body.error_code
             ? answer.body.error_code
-            : "cancellation requested";
+            : "requested, waiting for the server to confirm");
         return poll();
       });
     });
 
-    card.append(heading, status, feedback, controls([cancel, button("Poll", poll, "secondary")]), ttl, audit, body);
+    card.append(
+      heading,
+      status,
+      feedback,
+      controls([cancel, button("Poll", poll, "secondary")]),
+      cancelled,
+      ttl,
+      audit,
+      body
+    );
     poller = window.setInterval(poll, 500);
     polls["goal:" + goalId] = poller;
     polls["goal:" + goalId + ":ttl"] = window.setInterval(paintTtl, 500);

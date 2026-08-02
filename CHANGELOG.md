@@ -9,8 +9,20 @@ All notable changes to this project are documented here. Format follows
 ### Added
 
 - `docs/decisions.md`: the settled questions as one-line records, so they are not re-litigated.
+- An `e2e` suite driving the console in chromium through playwright, against the real demo node:
+  wallet and role filtering, the auth matrix grid, a tile's staleness countdown and expiry, a write
+  round-tripping into its read tile, the gate flipping both ways with the call agreeing, a goal
+  through feedback to a result, cancel and re-cancel, TTL eviction, both stream transports and the
+  heartbeat difference between them, and slow-consumer mode. Deselected by default.
 - Startup checks on anything derived from config or from another layer raise instead of asserting,
   so `python -O` is a supported way to run this. The full suite passes under it.
+
+### Fixed
+
+- The console reported a cancel's outcome in the goal's status line, where the next poll overwrote
+  it -- so a second cancel's `ALREADY_TERMINAL` was invisible. It has its own line now, which is
+  also the right place for it: the answer to a cancel request is not a goal status. Found by the
+  browser suite, which is exactly the class of bug the other tests could not see.
 
 - The console's request/response half, entirely discovered from the manifest and the served
   schemas: a labelled multi-token wallet in local storage with a visible warning, an identity chip

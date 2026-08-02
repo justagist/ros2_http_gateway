@@ -219,6 +219,8 @@ pre.sample, pre.result-body {
 .goal-id { margin: 0; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.85rem; }
 .goal-status { font-weight: 600; font-size: 0.85rem; }
 .goal-feedback, .goal-ttl { font-size: 0.8rem; color: var(--muted); }
+.goal-cancel { margin-top: 0.25rem; padding: 0.15rem 0.4rem; font-size: 0.8rem; border-radius: 3px; }
+.goal-cancel:empty { display: none; }
 pre.goal-result {
   margin: 0.35rem 0 0;
   padding: 0.4rem 0.5rem;
