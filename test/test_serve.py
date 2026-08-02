@@ -197,17 +197,39 @@ def test_an_open_event_stream_does_not_hold_shutdown_open(tmp_path: Path) -> Non
 def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
     """Informational soak: a 1 kHz subscription with no HTTP traffic.
 
-    The brief's under-5%-of-a-core figure is not reachable in rclpy, so this warns rather than
-    fails. Measured at ~900 msg/s: the gateway takes 17.2% of a core and a bare raw subscriber
-    whose callback only increments an integer takes 17.7%, the cost being rmw_zenoh plus rclpy's
-    per-message dispatch. The number to watch is therefore "no worse than a do-nothing
-    subscriber", which is what raw=True and the memoised encoding exist to hold.
+    Warns rather than fails, because the figure is dominated by the RMW and the machine, not by
+    this package. Measured at ~900 msg/s: 5-7% of a core on CI's default `rmw_fastrtps_cpp`,
+    against the brief's under-5% target; 11.5% under the same RMW on a busy workstation and 18%
+    there under `rmw_zenoh_cpp`. A bare raw subscriber whose callback only increments an integer
+    measured 17.7% on that workstation under zenoh, i.e. indistinguishable from the gateway.
+
+    So the number to watch is "no worse than a do-nothing subscriber on the same RMW", which is
+    what raw=True and the memoised encoding exist to hold -- not the absolute percentage. The
+    per-thread breakdown is what makes a regression attributable: a Python thread means this
+    package or rclpy, a `dds.*` or `zenoh` thread means the middleware.
     """
     ticks = os.sysconf("SC_CLK_TCK")
 
-    def cpu_seconds(pid: int) -> float:
-        fields = Path(f"/proc/{pid}/stat").read_text().split()
-        return (int(fields[13]) + int(fields[14])) / ticks
+    def cpu_seconds(path: Path) -> float:
+        raw = path.read_text()
+        # Fields are 1-based and `comm` may contain spaces, so index from after its closing
+        # bracket: utime is field 14 and stime field 15, which puts them at 11 and 12 here.
+        fields = raw[raw.rindex(")") + 2 :].split()
+        return (int(fields[11]) + int(fields[12])) / ticks
+
+    def per_thread(pid: int) -> dict[str, float]:
+        """CPU seconds by thread, named. A process total says nothing about what is spending it."""
+        usage: dict[str, float] = {}
+        for task in Path(f"/proc/{pid}/task").iterdir():
+            try:
+                name = (task / "comm").read_text().strip()
+                # Python does not name its threads to the OS, so every one of ours reads as
+                # `python`; the main thread is the one whose tid is the pid.
+                label = f"{name}[{task.name}]" + ("(main)" if task.name == str(pid) else "")
+                usage[label] = cpu_seconds(task / "stat")
+            except OSError:  # the thread exited mid-scan
+                continue
+        return usage
 
     # One subscription, not the fixture's two on the same topic: two callbacks per message
     # would answer a different question.
@@ -225,7 +247,9 @@ def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
         )
         time.sleep(0.5)
 
-        start_cpu = cpu_seconds(gateway.process.pid)
+        pid = gateway.process.pid
+        start_cpu = cpu_seconds(Path(f"/proc/{pid}/stat"))
+        start_threads = per_thread(pid)
         start = time.monotonic()
         deadline = start + 4.0
         published = 0
@@ -234,14 +258,25 @@ def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
             published += 1
             time.sleep(0.001)
         elapsed = time.monotonic() - start
-        used = cpu_seconds(gateway.process.pid) - start_cpu
+        used = cpu_seconds(Path(f"/proc/{pid}/stat")) - start_cpu
+        end_threads = per_thread(pid)
 
     rate = published / elapsed
     percent = used / elapsed * 100
+    busiest = sorted(
+        ((after - start_threads.get(thread, 0.0)) / elapsed * 100, thread)
+        for thread, after in end_threads.items()
+    )[::-1]
+    breakdown = ", ".join(f"{thread} {share:.0f}%" for share, thread in busiest[:4] if share >= 1.0)
     print(f"\n  published {rate:.0f} msg/s, gateway used {percent:.1f}% of one core")
+    for share, thread in busiest:
+        if share >= 1.0:
+            print(f"    {thread:28s} {share:5.1f}%")
     if percent >= _CPU_WARN_PERCENT:
+        # The breakdown rides on the warning because a quiet run prints nothing: attributing the
+        # cost to a thread is the difference between a number and a lead.
         warnings.warn(
             f"idle CPU {percent:.1f}% of one core at {rate:.0f} msg/s, above the "
-            f"{_CPU_WARN_PERCENT}% informational threshold",
+            f"{_CPU_WARN_PERCENT}% informational threshold; busiest threads: {breakdown}",
             stacklevel=1,
         )
