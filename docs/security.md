@@ -10,6 +10,9 @@ are already inside a trust boundary you control: an HMI on the cell network, a f
 dashboard behind a VPN, a customer integration behind a reverse proxy. It is not an
 internet-facing API and it is not an identity provider.
 
+The one-line rationale for each decision is in [decisions.md](decisions.md); this file carries
+the ones that need more than a line.
+
 ## Deny by default
 
 Nothing is reachable unless an endpoint names it. There is no graph discovery, no wildcard
@@ -82,14 +85,33 @@ Not a design goal, but the obvious footguns are bounded:
 
 There is no rate limiting and no request size limit. Put both in the reverse proxy.
 
+## What roles do and do not protect
+
+**Roles gate action, not description.** An authenticated caller can enumerate the configured
+routes whatever any listing says: an unknown path answers 404, a known one they may not use
+answers 403. So the security boundary is the 403, and only the 403.
+
+Everything downstream of that follows:
+
+- The OpenAPI document is served whole to any authenticated caller, including endpoints their
+  roles cannot use, because withholding them would not stop the enumeration above.
+- The console manifest *is* filtered to the caller's roles. That is defence in depth and a
+  convenience for the console, **not a boundary**: do not design against it, and do not treat an
+  endpoint as hidden because a manifest omits it. If knowing an endpoint exists is itself
+  sensitive, run a separate gateway with a separate config -- that is the only way to make it
+  true.
+- One reference is deliberately not filtered: a precondition keeps naming its state endpoint even
+  when the caller cannot read it. That path is already in the refusal message the same caller
+  receives when the gate fires, so withholding it here would hide in one place what the gateway
+  volunteers in another.
+- Nothing unauthenticated describes the system. `/health` reports liveness and the chosen
+  executor; the two UI shells contain no endpoint information, asserted by tests.
+
 ## The OpenAPI document and Swagger UI
 
 - `<base>/openapi.json` is authenticated. An anonymous caller cannot enumerate the configured
   surface from it.
-- Any authenticated caller sees the whole document, including endpoints their roles cannot use.
-  This is deliberate rather than an oversight: an unknown path answers 404 and a known one with
-  the wrong role answers 403, so the same list is already enumerable by asking. Per-role
-  filtering would be theatre while that is true.
+- Any authenticated caller sees the whole document, per the rule above.
 - `<base>/docs` serves an unauthenticated HTML shell, because a browser cannot attach a header
   to a top-level navigation. The shell contains no information about the API; it prompts for a
   token and fetches the document with it. The token is held in the page for the life of the tab,
@@ -104,8 +126,8 @@ Off by default (`http.console: false`), and off means the routes do not exist.
 
 - **The manifest is filtered by role**: a token is not shown an endpoint it cannot use, nor its
   ROS name, type or stream membership. Read that as defence in depth rather than a boundary --
-  see "What roles do and do not protect" above. Its purpose is to keep the console honest: what
-  it renders is what the caller can actually operate.
+  see [What roles do and do not protect](#what-roles-do-and-do-not-protect). Its purpose is to
+  keep the console honest: what it renders is what the caller can actually operate.
 - **`/whoami` requires no role**, only a valid token, and is served whether or not the console
   is enabled. It reveals the caller's own user and roles and nothing about the system, which is
   what lets a client tell an unrecognised token from a recognised one holding the wrong roles

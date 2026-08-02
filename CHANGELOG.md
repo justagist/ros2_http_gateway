@@ -8,6 +8,10 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- `docs/decisions.md`: the settled questions as one-line records, so they are not re-litigated.
+- Startup checks on anything derived from config or from another layer raise instead of asserting,
+  so `python -O` is a supported way to run this. The full suite passes under it.
+
 - The console's request/response half, entirely discovered from the manifest and the served
   schemas: a labelled multi-token wallet in local storage with a visible warning, an identity chip
   from `whoami`, topic tiles with a staleness countdown that flips the tile, schema-driven forms

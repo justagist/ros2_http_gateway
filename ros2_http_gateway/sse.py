@@ -166,7 +166,11 @@ class SseBroadcaster:
         if not self._clients or key in self._pending:
             return
         self._pending.add(key)
-        assert self._loop is not None  # set before the first client became visible
+        # The one assert this package keeps, deliberately: an invariant *this class* guarantees --
+        # `subscribe` sets the loop before a client is ever visible to the check above -- rather
+        # than a fact derived from config or from another layer. It runs per message on a ROS
+        # thread, so it is also the one place where `python -O` dropping it is a feature.
+        assert self._loop is not None
         self._loop.call_soon_threadsafe(self._drain, key)
 
     # ------------------------------------------------------------------- loop side

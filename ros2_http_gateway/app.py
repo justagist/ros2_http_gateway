@@ -395,7 +395,8 @@ def _service_call(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
     to_dict = endpoint.to_dict
     bindings = endpoint.bindings
     timeout_s = endpoint.config.timeout_ms / 1000.0
-    assert from_dict is not None and to_dict is not None
+    if from_dict is None or to_dict is None:
+        raise RuntimeError(f"{path}: a service endpoint resolved without both converters")
 
     async def call(request: Request) -> Response:
         raw = await request.body()
@@ -461,7 +462,8 @@ def _topic_write(endpoint: ResolvedEndpoint, runtime: RosRuntime) -> Handler:
     """POST a body to be published, returning once it is queued for the ROS side."""
     path = endpoint.config.path
     from_dict = endpoint.from_dict
-    assert from_dict is not None, "a topic write endpoint always has a decoder"
+    if from_dict is None:
+        raise RuntimeError(f"{path}: a topic write endpoint resolved without a decoder")
 
     async def write(request: Request) -> Response:
         raw = await request.body()
@@ -501,7 +503,8 @@ def _goal_submit(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalReg
     from_dict = endpoint.from_dict
     feedback_to_dict = endpoint.feedback_to_dict
     result_to_dict = endpoint.result_to_dict
-    assert from_dict is not None and feedback_to_dict is not None and result_to_dict is not None
+    if from_dict is None or feedback_to_dict is None or result_to_dict is None:
+        raise RuntimeError(f"{path}: an action endpoint resolved without all three converters")
 
     async def submit(request: Request) -> Response:
         raw = await request.body()

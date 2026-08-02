@@ -332,8 +332,13 @@ def _bindings(
         except UnsupportedTargetError as exc:
             problems.append(f"{spot}: {exc}")
             continue
-        # The config engine has already checked the referenced parameters exist.
-        assert all(name in endpoint.path_params for name in template_parameters(template))
+        # Already checked by the config engine; re-checked because `apply_bindings` substitutes
+        # nothing for an unknown name and would fail at request time instead of at startup.
+        unknown = [
+            name for name in template_parameters(template) if name not in endpoint.path_params
+        ]
+        if unknown:
+            raise RuntimeError(f"{spot}: template names unknown path parameter(s) {unknown}")
         built.append(ParamBinding(target=parts, template=template, coerce=coerce, label=target))
     return tuple(built)
 

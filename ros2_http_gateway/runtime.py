@@ -171,7 +171,8 @@ class RosRuntime:
 
         for path, endpoint in self.resolved.endpoints.items():
             if endpoint.config.is_topic_read:
-                assert endpoint.to_dict is not None
+                if endpoint.to_dict is None:
+                    raise RuntimeError(f"{path}: a topic read resolved without an encoder")
                 cache = TopicCache(
                     endpoint.message_type, endpoint.to_dict, endpoint.config.stale_after_ms
                 )

@@ -8,12 +8,15 @@ logging, server-sent events and an auto-generated OpenAPI 3.1 document.
 
 **Deny by default: nothing is exposed unless it appears in the config.**
 
-> Status: under construction. Topics, services, actions, the global SSE stream and the generated
-> OpenAPI document with its Swagger UI all work end to end today, with bearer auth, role checks,
-> state preconditions and audit logging. Still to come: the bench suite and the release. See
+> Status: feature-complete for 0.1.0 and not yet released. Topics, services, actions, the global
+> SSE stream, the generated OpenAPI document with its Swagger UI, and the built-in test console all
+> work end to end, with bearer auth, role checks, state preconditions and audit logging. Benchmarks
+> are in [bench/RESULTS.md](bench/RESULTS.md) and the release workflow is written; what remains
+> before a tag is listed in [docs/release.md](docs/release.md). See
 > [CHANGELOG.md](CHANGELOG.md) for what is real, [docs/configuration.md](docs/configuration.md)
-> for the config format, [docs/protocol.md](docs/protocol.md) for the wire protocol and
-> [docs/security.md](docs/security.md) for the security model and its known gaps.
+> for the config format, [docs/protocol.md](docs/protocol.md) for the wire protocol,
+> [docs/security.md](docs/security.md) for the security model and its known gaps, and
+> [docs/decisions.md](docs/decisions.md) for the settled questions and why.
 
 ## Why not rosbridge
 

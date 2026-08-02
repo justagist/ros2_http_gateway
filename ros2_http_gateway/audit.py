@@ -53,7 +53,8 @@ class AuditLogger:
         """Open the sink and start the writer task."""
         if self._config.sink == "file":
             path = self._config.path
-            assert path is not None, "the config schema requires a path when sink is file"
+            if path is None:
+                raise RuntimeError("audit sink is `file` but no path was configured")
             path.parent.mkdir(parents=True, exist_ok=True)
             self._stream = path.open("ab")
         else:

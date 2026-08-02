@@ -488,6 +488,18 @@ async def test_the_docs_page_references_nothing_external(gateway: Any) -> None:
     assert "http://" not in page and "https://" not in page
 
 
+async def test_the_docs_shell_says_nothing_about_this_system(gateway: Any) -> None:
+    """It is served unauthenticated, so it has to be inert -- the same rule as the console shell.
+
+    Only our own template is checked. The vendored Swagger UI assets are upstream code that never
+    saw this config; what matters is that the page we wrote leaks nothing while it is open to
+    anyone who can reach the port.
+    """
+    page = (await gateway.get(f"{BASE}/docs")).text
+    for leaked in ("/gateway_test", "example_interfaces", "std_srvs", "/mission/status", "/pick"):
+        assert leaked not in page, f"the docs shell mentions {leaked}"
+
+
 async def test_every_url_the_docs_page_names_is_actually_served(gateway: Any) -> None:
     """The reference the *page* makes, not the path we happen to know about.
 

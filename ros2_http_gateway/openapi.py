@@ -336,7 +336,8 @@ class _Builder:
 
     def event_stream(self) -> dict[str, Any]:
         sse = self.config.sse
-        assert sse is not None
+        if sse is None:
+            raise RuntimeError("the event stream was described without an sse block")
         events = "\n".join(
             f"* `event: {key}` -- the body of `GET {key}`, byte for byte." for key in sse.include
         )
