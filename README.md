@@ -199,6 +199,12 @@ discovery path that could add one at runtime.
 - **Roles** are per endpoint. A valid token with the wrong role is 403, and authentication and
   the role check both run *before* any state precondition, so a caller who may not use an
   endpoint learns nothing about the robot from being refused.
+- **Roles gate action, not description.** An authenticated caller can already enumerate the
+  configured routes by asking -- an unknown path answers 404 and a known one they may not use
+  answers 403 -- so the OpenAPI document is served whole to any of them. The console manifest
+  does filter itself to the caller's roles, but that is defence in depth and a convenience, not
+  a boundary: do not design against it, and do not treat an endpoint as hidden because a
+  manifest omits it.
 - **Audit**: one JSON line per authenticated request -- who, what, the decision and its reason,
   the outcome, the latency. Never tokens, never request bodies, never the query string.
 - **The gateway does not terminate TLS.** It binds `127.0.0.1` unless you say otherwise, and

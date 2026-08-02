@@ -649,6 +649,27 @@ def test_unrelated_paths_do_not_conflict(tmp_path: Path) -> None:
     assert len(load(tmp_path, document).endpoints) == 3
 
 
+def test_an_empty_roles_list_is_refused(tmp_path: Path) -> None:
+    """`_guard` reads an empty role set as "any authenticated caller", for `/whoami`.
+
+    That reading must stay unreachable from a config file, or an author who wrote `roles: []`
+    meaning "nobody" would get an endpoint open to every valid token. Both layers refuse it: the
+    schema requires a non-empty array, and the model refuses one that is empty or absent.
+    """
+    for roles in ([], None):
+        document = copy.deepcopy(MINIMAL)
+        document["endpoints"]["/state"]["roles"] = roles
+        assert any("roles" in problem for problem in problems(tmp_path, document)), roles
+
+
+def test_an_empty_roles_list_under_defaults_is_refused_too(tmp_path: Path) -> None:
+    """The same hole one level up: defaults feed every endpoint that omits its own roles."""
+    document = copy.deepcopy(MINIMAL)
+    document["defaults"] = {"roles": []}
+    del document["endpoints"]["/state"]["roles"]
+    assert any("roles" in problem for problem in problems(tmp_path, document))
+
+
 # --------------------------------------------------------------------------------------
 # auth
 # --------------------------------------------------------------------------------------

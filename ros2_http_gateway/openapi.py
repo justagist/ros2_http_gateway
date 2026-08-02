@@ -59,7 +59,7 @@ class _Builder:
         self.schemas: dict[str, Any] = {}
 
     def build(self) -> dict[str, Any]:
-        paths: dict[str, Any] = {"/health": _health_path()}
+        paths: dict[str, Any] = {"/health": _health_path(), "/whoami": _whoami_path()}
         for path, endpoint in self.resolved.endpoints.items():
             if endpoint.config.kind == "action":
                 paths.update(self.action_paths(path, endpoint))
@@ -548,6 +548,36 @@ def _health_path() -> dict[str, Any]:
                         },
                     },
                 )
+            },
+        }
+    }
+
+
+def _whoami_path() -> dict[str, Any]:
+    return {
+        "get": {
+            "summary": "The identity behind the presented token",
+            "description": (
+                "Authenticated, but with no role requirement, so a client can tell an "
+                "unrecognised token from a recognised one holding the wrong roles without "
+                "probing an endpoint. It reveals the caller's own user and roles and nothing "
+                "about the system, so it cannot answer 403."
+            ),
+            "operationId": "whoami",
+            "tags": ["identity"],
+            "responses": {
+                "200": _json_response(
+                    "The token is recognised.",
+                    {
+                        "type": "object",
+                        "required": ["user", "roles"],
+                        "properties": {
+                            "user": {"type": "string"},
+                            "roles": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                ),
+                **_refusals(_UNAUTHENTICATED),
             },
         }
     }

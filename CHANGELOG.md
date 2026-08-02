@@ -12,10 +12,15 @@ All notable changes to this project are documented here. Format follows
   kind, ROS name and type, roles, path parameters, staleness bound or timeout, `request_map`,
   precondition summaries, stream membership, and an action's four derived routes. Schemas are
   referenced by component key plus document URL rather than embedded.
-- The manifest is filtered by role, more strictly than the OpenAPI document: an endpoint a token
-  cannot use is absent, and so are its ROS name, its type and its membership of the event stream.
+- The manifest is filtered by role: an endpoint a token cannot use is absent, and so are its ROS
+  name, its type and its membership of the event stream. This is defence in depth and a
+  correctness property for the console, not a security boundary -- roles gate action, not
+  description, and the 403 is the boundary. Documented in docs/security.md.
 - `GET <base>/whoami`: the caller's user and roles, for any valid token including one whose role
-  no endpoint uses. The only route with no role requirement.
+  no endpoint uses. Served by every deployment whether the console is enabled or not, and
+  described in the OpenAPI document. The only route with no role requirement, so the only one
+  that cannot answer 403; an empty role set is unreachable from a config, which is what makes
+  that safe.
 - `http.console` (default **false**) serves the test console from package data: one HTML, one CSS,
   one JS, no CDN and no build step. Off means the routes are not registered at all. Its three
   paths are reserved for collision checking regardless, so enabling it cannot break a config that

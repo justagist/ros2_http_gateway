@@ -5,10 +5,12 @@ timings that matter, the derived action routes, stream membership, and where eac
 JSON Schemas live in the OpenAPI document. The console hardcodes nothing; if an endpoint is not
 in here, the console cannot know about it.
 
-**Filtered by role.** Deny-by-default applies to knowledge as well as access: a token is shown
-only the endpoints at least one of its roles permits. That is a stronger rule than the OpenAPI
-document follows, and deliberately so -- the document is a byproduct of the config, while this is
-a listing built for a client to enumerate.
+**Filtered by role**, so a token is shown only the endpoints at least one of its roles permits.
+That is defence in depth and a correctness property for the console -- what it renders is what the
+caller can actually operate -- and *not* a security boundary. Roles gate action, not description:
+an authenticated caller can enumerate the configured routes anyway, since an unknown path answers
+404 and a known one they may not use answers 403. The 403 is the boundary. Nothing here should be
+relied on to hide an endpoint's existence.
 
 Schemas are referenced rather than embedded: a component key plus the document URL, so the
 console fetches the OpenAPI document once and resolves pointers into it. Embedding them would

@@ -181,6 +181,16 @@ def build_app(
         )
     )
     routes.extend(_docs_routes(base))
+    # Unconditional, unlike the console: asking a gateway what a token is does not depend on a
+    # testing UI being switched on, and it is described in the OpenAPI document as a route
+    # every deployment serves.
+    routes.append(
+        Route(
+            f"{base}/whoami",
+            _guard(_whoami(), frozenset(), "/whoami", audit, authenticator, policy),
+            methods=["GET"],
+        )
+    )
     if resolved.config.http.console:
         routes.extend(_console_routes(resolved, base, everyone, audit, authenticator, policy))
 
@@ -790,14 +800,9 @@ def _console_routes(
     is a route that does not exist.
     """
 
-    def guard(handler: Handler, roles: frozenset[str], path: str) -> Handler:
-        return _guard(handler, roles, path, audit, authenticator, policy)
-
-    # No role requirement: any valid token may ask who it is. Still authenticated, still audited.
-    yield Route(f"{base}/whoami", guard(_whoami(), frozenset(), "/whoami"), methods=["GET"])
     yield Route(
         f"{base}/console/manifest",
-        guard(_manifest(resolved), everyone, "/console/manifest"),
+        _guard(_manifest(resolved), everyone, "/console/manifest", audit, authenticator, policy),
         methods=["GET"],
     )
     yield Route(f"{base}/console", _console_page(base), methods=["GET"])
@@ -806,7 +811,13 @@ def _console_routes(
 
 
 def _whoami() -> Handler:
-    """Who this token is, for any token the gateway accepts."""
+    """Who this token is, for any token the gateway accepts.
+
+    No role requirement, which is what makes it useful: a caller can tell a wrong token from a
+    token with the wrong roles without probing an endpoint. That distinction is only safe because
+    an empty role set is unreachable from a config -- `roles:` is required and rejects an empty
+    list at both the schema and the model layer -- so this is the one route that can hold it.
+    """
 
     async def whoami(request: Request) -> Response:
         identity: Identity = request.state.identity

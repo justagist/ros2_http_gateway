@@ -910,6 +910,53 @@
           "actions"
         ]
       }
+    },
+    "/whoami": {
+      "get": {
+        "description": "Authenticated, but with no role requirement, so a client can tell an unrecognised token from a recognised one holding the wrong roles without probing an endpoint. It reveals the caller's own user and roles and nothing about the system, so it cannot answer 403.",
+        "operationId": "whoami",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "roles": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "user": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "user",
+                    "roles"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The token is recognised."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          }
+        },
+        "summary": "The identity behind the presented token",
+        "tags": [
+          "identity"
+        ]
+      }
     }
   },
   "security": [

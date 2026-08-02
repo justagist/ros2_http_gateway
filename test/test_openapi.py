@@ -206,13 +206,30 @@ def test_health_is_the_only_operation_without_security(document: dict[str, Any])
     assert document["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
 
 
-def test_every_authenticated_operation_documents_401_and_403(document: dict[str, Any]) -> None:
+def test_every_authenticated_operation_documents_401(document: dict[str, Any]) -> None:
     for path, operations in document["paths"].items():
         for method, operation in operations.items():
             if operation.get("security") == []:
                 continue
             assert "401" in operation["responses"], f"{method} {path} omits 401"
-            assert "403" in operation["responses"], f"{method} {path} omits 403"
+
+
+def test_403_is_documented_exactly_where_a_role_is_required(document: dict[str, Any]) -> None:
+    """`/whoami` has no role requirement, so promising a 403 there would be a lie."""
+    for path, operations in document["paths"].items():
+        for method, operation in operations.items():
+            if operation.get("security") == []:
+                continue
+            expected = path != "/whoami"
+            assert ("403" in operation["responses"]) is expected, f"{method} {path}"
+
+
+def test_whoami_is_described(document: dict[str, Any]) -> None:
+    """It is served by every deployment, console or not, so the document has to carry it."""
+    operation = document["paths"]["/whoami"]["get"]
+    body = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert sorted(body["required"]) == ["roles", "user"]
+    assert operation.get("security") != [], "it is authenticated"
 
 
 def test_a_write_route_documents_400_and_a_read_route_does_not(document: dict[str, Any]) -> None:

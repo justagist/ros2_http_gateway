@@ -102,13 +102,16 @@ There is no rate limiting and no request size limit. Put both in the reverse pro
 
 Off by default (`http.console: false`), and off means the routes do not exist.
 
-- **The manifest is filtered by role**, which is the strictest listing the gateway serves: a
-  token is not told about an endpoint it cannot use, nor its ROS name, type or stream membership.
-  This is deliberately stronger than the OpenAPI document, which any authenticated caller reads
-  in full -- the document is a byproduct of the config, while the manifest exists to be
-  enumerated by a client.
-- **`/whoami` requires no role**, only a valid token. It reveals the caller's own user and roles
-  and nothing about the system.
+- **The manifest is filtered by role**: a token is not shown an endpoint it cannot use, nor its
+  ROS name, type or stream membership. Read that as defence in depth rather than a boundary --
+  see "What roles do and do not protect" above. Its purpose is to keep the console honest: what
+  it renders is what the caller can actually operate.
+- **`/whoami` requires no role**, only a valid token, and is served whether or not the console
+  is enabled. It reveals the caller's own user and roles and nothing about the system, which is
+  what lets a client tell an unrecognised token from a recognised one holding the wrong roles
+  without probing an endpoint. An empty role set means "any authenticated caller" inside the
+  request guard, and that reading is unreachable from a config file: `roles:` is required and an
+  empty list is refused by both the schema and the model.
 - **The console page is unauthenticated**, like the Swagger UI shell, because a browser cannot
   attach an Authorization header to a top-level navigation. The page contains no endpoint
   information; a test asserts the served HTML mentions no ROS name or interface type. Everything

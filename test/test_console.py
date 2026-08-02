@@ -1,8 +1,13 @@
 """The console's server side: manifest, whoami, and serving that is off unless asked for.
 
-The load-bearing property is that the manifest is filtered by role. It is the console's only
-source of truth, so an endpoint a token cannot use must not appear in it -- deny by default
-applied to knowledge, not just to access.
+The property under test is that the manifest is filtered by role: it is the console's only source
+of truth, so an endpoint a token cannot use must not appear in it, or the console would offer
+buttons that can only 403.
+
+That filtering is defence in depth, not a boundary. Roles gate action, not description -- an
+authenticated caller can enumerate the routes by asking, since an unknown path answers 404 and a
+forbidden one answers 403. These tests pin the behaviour; they do not imply the manifest hides
+anything an attacker could not otherwise learn.
 """
 
 from __future__ import annotations
@@ -319,7 +324,7 @@ async def test_the_console_routes_are_audited_like_any_other(
 
 
 async def test_the_console_is_off_unless_asked_for(tmp_path: Path) -> None:
-    """Off means absent, not a route that answers 403."""
+    """Off means absent, not a route that answers 403. `/whoami` is not part of the console."""
     resolved = resolve(load_config(write_config(tmp_path, document(console=False))))
     runtime = RosRuntime(resolved)
     runtime.start()
@@ -330,15 +335,17 @@ async def test_the_console_is_off_unless_asked_for(tmp_path: Path) -> None:
             AuditLogger(AuditConfig(sink="stderr", path=None)),
             StaticTokenAuthenticator(resolved.config.tokens),
         )
-        paths = {route.path for route in app.routes}
-        assert not [path for path in paths if "console" in path or path.endswith("/whoami")]
+        assert not [route.path for route in app.routes if "console" in route.path]
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://gateway"
         ) as client:
-            for path in ("/console", "/console/manifest", "/whoami"):
+            for path in ("/console", "/console/manifest"):
                 response = await client.get(f"{BASE}{path}", headers=bearer(OPERATOR_TOKEN))
                 assert response.status_code == 404, path
+
+            whoami = await client.get(f"{BASE}/whoami", headers=bearer(OPERATOR_TOKEN))
+            assert whoami.status_code == 200, "whoami is served whether the console is or not"
     finally:
         runtime.stop()
 
@@ -383,16 +390,32 @@ async def test_the_console_page_references_nothing_external(gateway: httpx.Async
     assert "http://" not in page and "https://" not in page
 
 
-async def test_the_console_page_is_reachable_without_a_token(gateway: httpx.AsyncClient) -> None:
+async def test_nothing_served_unauthenticated_speaks_about_this_system(
+    gateway: httpx.AsyncClient,
+) -> None:
     """A browser cannot put a header on a navigation, so the shell has to be open.
 
-    It carries no information about the API: everything it renders comes from the manifest and
-    whoami, both of which are guarded and audited.
+    All three files it loads have to be inert, not just the HTML: a topic name hardcoded into the
+    JS or a per-endpoint rule in the CSS would leak exactly what the manifest withholds. Whatever
+    the console renders comes from the manifest and whoami, both guarded and audited.
     """
-    page = await gateway.get(f"{BASE}/console")
-    assert page.status_code == 200
-    for leaked in (STATE_TOPIC, "/gateway_test_service", "example_interfaces"):
-        assert leaked not in page.text
+    vocabulary = (
+        STATE_TOPIC,
+        "/gateway_test_service",
+        "/gateway_test_add",
+        "example_interfaces",
+        "std_srvs",
+        "/mission/status",
+        "/secret/state",
+        "/pick",
+        OPERATOR_TOKEN,
+        VIEWER_TOKEN,
+    )
+    for path in ("/console", "/console/console.js", "/console/console.css"):
+        response = await gateway.get(f"{BASE}{path}")
+        assert response.status_code == 200, path
+        for leaked in vocabulary:
+            assert leaked not in response.text, f"{path} mentions {leaked}"
 
 
 async def _entry(gateway: httpx.AsyncClient, path: str) -> dict[str, Any]:

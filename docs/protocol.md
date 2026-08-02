@@ -274,18 +274,21 @@ connected stream cannot hold shutdown open.
 finish, flushes the audit queue and destroys the ROS node, in that order. Ctrl-C exits 130
 without a traceback; `SIGTERM` propagates as usual, which is what an init system expects.
 
-## The console routes
+## Identity and the console
 
-Present only when `http.console` is true.
+`GET <base>/whoami` is always present. The two `console` routes need `http.console: true`.
 
 ### `GET <base>/whoami`
+
+Served by every deployment, console or not, and described in the OpenAPI document.
 
 ```json
 {"user": "hmi-station-1", "roles": ["operator"]}
 ```
 
 Any token the gateway accepts, including one whose role no endpoint uses: it is still a valid
-token and is entitled to be told what it is. This is the only route with no role requirement.
+token and is entitled to be told what it is. This is the only route with no role requirement, so
+it is the only one that cannot answer 403.
 
 ### `GET <base>/console/manifest`
 
@@ -296,9 +299,11 @@ state endpoint, dotted field and allow-map), stream membership, and for an actio
 derived routes. Schemas are referenced rather than embedded: a component key plus the URL of the
 OpenAPI document to resolve it in.
 
-**Filtered by role**, more strictly than the OpenAPI document: an endpoint the caller cannot use
-does not appear, and neither does its ROS name, its type, or its membership of the event stream.
-A token holding no role used by any endpoint gets 403.
+**Filtered by role**: an endpoint the caller cannot use does not appear, and neither does its ROS
+name, its type, or its membership of the event stream. A token holding no role used by any
+endpoint gets 403. This is defence in depth rather than a boundary -- roles gate action, not
+description, and an authenticated caller can enumerate the routes by asking regardless. The point
+of the filtering is that the console shows only what the caller can actually operate.
 
 All URLs in it follow `X-Forwarded-Prefix`, so a console served behind a proxy needs no
 knowledge of the prefix.
