@@ -100,6 +100,12 @@ Python 3.10+, ROS 2 Humble, Jazzy, Kilted, Lyrical and Rolling. Humble is the fe
 floor: `ros.executor: auto` uses `rclpy.experimental.EventsExecutor` where it exists and
 falls back to `MultiThreadedExecutor` where it does not.
 
+One performance caveat, measured rather than assumed: on Humble a 1 kHz topic costs about
+80% of a core, against under 5% on Jazzy and newer. The cost is rclpy's per-message dispatch
+on that distro -- an idle gateway still costs ~1%, and the money is spent before any code in
+this package runs -- so nothing here can avoid it. Everything works on Humble; if you intend
+to stream kilohertz topics, budget for it or use a newer distro.
+
 ## Design in one picture
 
 ```

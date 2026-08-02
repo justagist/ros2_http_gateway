@@ -197,16 +197,23 @@ def test_an_open_event_stream_does_not_hold_shutdown_open(tmp_path: Path) -> Non
 def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
     """Informational soak: a 1 kHz subscription with no HTTP traffic.
 
-    Warns rather than fails, because the figure is dominated by the RMW and the machine, not by
-    this package. Measured at ~900 msg/s: 5-7% of a core on CI's default `rmw_fastrtps_cpp`,
-    against the brief's under-5% target; 11.5% under the same RMW on a busy workstation and 18%
-    there under `rmw_zenoh_cpp`. A bare raw subscriber whose callback only increments an integer
-    measured 17.7% on that workstation under zenoh, i.e. indistinguishable from the gateway.
+    Warns rather than fails, because the figure is dominated by the distro, the RMW and the
+    machine, not by this package. Measured at ~900 msg/s on CI's default `rmw_fastrtps_cpp`:
+    under 5% of a core on Jazzy and newer, meeting the brief's target, and **82% on Humble**.
+    On a busy workstation, 13% under fastrtps and 18% under `rmw_zenoh_cpp`.
 
-    So the number to watch is "no worse than a do-nothing subscriber on the same RMW", which is
-    what raw=True and the memoised encoding exist to hold -- not the absolute percentage. The
-    per-thread breakdown is what makes a regression attributable: a Python thread means this
-    package or rclpy, a `dds.*` or `zenoh` thread means the middleware.
+    Humble's cost is rclpy's per-message dispatch, not anything here and not a busy-wait: the
+    quiet measurement is 1.0% there, so it scales with traffic. It works out at roughly 780us of
+    Python per message on the spin thread against under 55us on Jazzy. Nothing in this package
+    can avoid it -- the cost is spent rebuilding a wait set and constructing a handler before our
+    callback is reached, and our callback is one tuple and one attribute store.
+
+    So the number to watch is "no worse than a do-nothing subscriber on the same distro and RMW",
+    which is what raw=True and the memoised encoding exist to hold, not the absolute percentage.
+    The two measurements together are what make a regression attributable: a quiet figure that
+    climbs means a busy-wait somewhere in this package, a loaded one that climbs means per-message
+    work. The per-thread split says whose -- a Python thread is this package or rclpy, a `dds.*`
+    or `zenoh` thread is the middleware.
     """
     ticks = os.sysconf("SC_CLK_TCK")
 
