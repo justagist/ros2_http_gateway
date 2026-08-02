@@ -161,6 +161,84 @@ outcome, success or not (`TIMEOUT`, `SERVICE_UNAVAILABLE`, `PRECONDITION_FAILED`
 `GOAL_REJECTED`). Both use the same error envelope. See
 [docs/protocol.md](docs/protocol.md).
 
+## Security model
+
+Deny by default: an endpoint that is not in the config does not exist, and there is no
+discovery path that could add one at runtime.
+
+- **Tokens** are compared as SHA-256 digests with `hmac.compare_digest`, and every configured
+  digest is compared even after a match, so neither the token nor its position in the file can
+  be timed. Prefer `token_sha256:` in the config; plaintext `token:` is hashed on load, warned
+  about loudly, and refused outright if the config file is world-readable.
+- **Roles** are per endpoint. A valid token with the wrong role is 403, and authentication and
+  the role check both run *before* any state precondition, so a caller who may not use an
+  endpoint learns nothing about the robot from being refused.
+- **Audit**: one JSON line per authenticated request -- who, what, the decision and its reason,
+  the outcome, the latency. Never tokens, never request bodies, never the query string.
+- **The gateway does not terminate TLS.** It binds `127.0.0.1` unless you say otherwise, and
+  binding `0.0.0.0` logs a warning. Put a reverse proxy in front of it; see below.
+- **No rate limiting and no request size limit.** Both belong in the proxy.
+
+Known gaps, and why, are written down in [docs/security.md](docs/security.md) -- including the
+one place a credential may appear in a URL (`?access_token=` on the event stream, because
+browser `EventSource` cannot set headers) and what that costs you.
+
+## Behind a reverse proxy
+
+The proxy terminates TLS and, if you want, mounts several cells under one host. Tell the
+gateway what prefix it was reached through and its OpenAPI `servers`, its Swagger UI asset
+URLs and its "Try it out" requests all come out prefix-correct.
+
+```nginx
+upstream cell3 { server 127.0.0.1:8081; keepalive 8; }
+upstream cell4 { server 127.0.0.1:8082; keepalive 8; }
+
+server {
+    listen 443 ssl;
+    server_name cells.example.com;
+
+    ssl_certificate     /etc/ssl/certs/cells.pem;
+    ssl_certificate_key /etc/ssl/private/cells.key;
+
+    # One block per gateway. The trailing slash on both sides strips the prefix before it
+    # reaches the gateway, and X-Forwarded-Prefix hands it back so generated URLs keep it.
+    location /cell3/ {
+        proxy_pass http://cell3/;
+        proxy_set_header X-Forwarded-Prefix /cell3;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";     # keep the upstream connection alive
+
+        # The event stream and the per-goal feedback streams need all three. Without
+        # `proxy_buffering off` nginx holds events until the response ends, which for a
+        # stream is never; the gateway also sends `X-Accel-Buffering: no`, but do not rely
+        # on one of the two.
+        proxy_buffering off;
+        gzip off;
+        proxy_read_timeout 1h;
+
+        client_max_body_size 256k;         # the gateway has no limit of its own
+        limit_req zone=api burst=20 nodelay;
+    }
+
+    location /cell4/ {
+        proxy_pass http://cell4/;
+        proxy_set_header X-Forwarded-Prefix /cell4;
+        include /etc/nginx/snippets/gateway-common.conf;
+    }
+}
+```
+
+`https://cells.example.com/cell3/api/v1/docs` then loads Swagger UI, whose document says
+`servers: [{"url": "/cell3/api/v1"}]`, so every call it makes lands on the right gateway.
+
+Two things to get right: the heartbeat is every 15 s, so `proxy_read_timeout` must be well
+above that; and `limit_req`/`client_max_body_size` are the proxy's job because the gateway
+deliberately has neither.
+
 ## Non-goals for v1
 
 - **Bulk or binary data planes.** Images, point clouds and other large blobs are not a

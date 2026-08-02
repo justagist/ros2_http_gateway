@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ros2_http_gateway</title>
-    <!-- Relative, so a gateway mounted behind a proxy prefix resolves these correctly with
-         no knowledge of the prefix. -->
-    <link rel="stylesheet" href="swagger-ui.css" />
+    <!-- __ASSETS__ and __SPEC__ are substituted per request with the prefix this gateway was
+         actually reached through, so the same file works at /api/v1/docs and at
+         /cell3/api/v1/docs. Relative URLs would not: from a page at `.../docs` the browser
+         resolves `swagger-ui.css` as a sibling of `docs`, not a child of it. -->
+    <link rel="stylesheet" href="__ASSETS__/swagger-ui.css" />
     <style>
       body { margin: 0; background: #fafafa; }
       #gate {
@@ -40,7 +42,7 @@
       </p>
     </div>
     <div id="ui"></div>
-    <script src="swagger-ui-bundle.js"></script>
+    <script src="__ASSETS__/swagger-ui-bundle.js"></script>
     <script>
       (function () {
         var gate = document.getElementById("gate");
@@ -69,7 +71,7 @@
             return;
           }
           error.textContent = "Loading…";
-          fetch("openapi.json", { headers: { Authorization: "Bearer " + token } })
+          fetch("__SPEC__", { headers: { Authorization: "Bearer " + token } })
             .then(function (response) {
               if (response.status === 401) throw new Error("That token was not recognised.");
               if (response.status === 403) {

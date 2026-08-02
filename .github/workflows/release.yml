@@ -1,0 +1,88 @@
+name: release
+
+# Tag push only. There is deliberately no `workflow_dispatch` and no `push: branches`: the one
+# way to publish is for a maintainer to push a version tag, which is a decision no automation
+# should be able to take on its own.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # Build and check first, as its own job, so a bad artefact never reaches the publish step.
+  build:
+    name: build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: the tag must match the packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          packaged=$(python -c 'import runpy; print(runpy.run_path("ros2_http_gateway/_version.py")["__version__"])')
+          if [ "$tag" != "$packaged" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $packaged in _version.py"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI verifies this workflow's OIDC identity, so there is no API token
+    # to store or leak. It requires a one-time setup in the PyPI UI, described in
+    # docs/release.md. An environment adds a second gate the maintainer can require a review on.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github_release:
+    name: GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: changelog excerpt
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The section for this version only: from its heading to the next one.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { inside = 1; next }
+            inside && /^## \[/     { exit }
+            inside                 { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: dist/*
+          fail_on_unmatched_files: true

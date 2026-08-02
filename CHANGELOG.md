@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] - 2026-08-02
+
+First release.
+
 ### Added
 
 - `bench/`: one command (`python3 bench/run.py`) produces a markdown results table with the
@@ -260,4 +266,5 @@ All notable changes to this project are documented here. Format follows
   no-ROS lint/type/unit job and a ROS distro matrix job.
 - Example configs `examples/dev.yaml` and `examples/locked_down.yaml`.
 
-[Unreleased]: https://github.com/justagist/ros2_http_gateway/compare/main...HEAD
+[Unreleased]: https://github.com/justagist/ros2_http_gateway/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/justagist/ros2_http_gateway/releases/tag/v0.1.0

@@ -57,7 +57,6 @@ _ORJSON_OPTS: Final = orjson.OPT_SERIALIZE_NUMPY
 # path-traversal bug away from serving the config file.
 _DOCS_DIR: Final = Path(__file__).parent / "static" / "swagger"
 _DOCS_ASSETS: Final = {
-    "docs": ("index.html", "text/html; charset=utf-8"),
     "docs/swagger-ui.css": ("swagger-ui.css", "text/css"),
     "docs/swagger-ui-bundle.js": ("swagger-ui-bundle.js", "text/javascript"),
 }
@@ -717,8 +716,36 @@ def _docs_routes(base: str) -> Iterator[Route]:
     browser cannot send an Authorization header for a top-level navigation anyway. It asks for a
     token and fetches the document with it.
     """
+    yield Route(f"{base}/docs", _docs_page(base), methods=["GET"])
     for route, (name, media_type) in _DOCS_ASSETS.items():
         yield Route(f"{base}/{route}", _asset(_DOCS_DIR / name, media_type), methods=["GET"])
+
+
+def _docs_page(base: str) -> Handler:
+    """The UI shell, with its asset and document URLs made absolute for this request.
+
+    They cannot be relative. A browser resolves a relative reference from a page at
+    ``<base>/docs`` against ``<base>/``, so ``swagger-ui.css`` would be fetched as a *sibling* of
+    ``docs`` rather than a child, and the styling and the whole bundle would 404 -- differently
+    again depending on whether the URL happened to end in a slash. Substituting the prefix the
+    request actually arrived through gets it right at ``/api/v1/docs`` and at
+    ``/cell3/api/v1/docs`` alike.
+    """
+    template = (_DOCS_DIR / "index.html").read_text(encoding="utf-8")
+    rendered: dict[str, bytes] = {}
+
+    async def page(request: Request) -> Response:
+        prefix = _external_prefix(request)
+        body = rendered.get(prefix)
+        if body is None:
+            body = rendered[prefix] = (
+                template.replace("__ASSETS__", f"{prefix}{base}/docs")
+                .replace("__SPEC__", f"{prefix}{base}/openapi.json")
+                .encode("utf-8")
+            )
+        return Response(body, 200, media_type="text/html; charset=utf-8")
+
+    return page
 
 
 def _asset(path: Path, media_type: str) -> Handler:

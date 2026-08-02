@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -468,14 +469,46 @@ async def test_the_docs_page_references_nothing_external(gateway: Any) -> None:
     """`no CDN` is the requirement, and it is one careless edit away from being false."""
     page = (await gateway.get(f"{BASE}/docs")).text
     assert "http://" not in page and "https://" not in page
-    assert 'src="swagger-ui-bundle.js"' in page, "assets must be referenced relatively"
+
+
+async def test_every_url_the_docs_page_names_is_actually_served(gateway: Any) -> None:
+    """The reference the *page* makes, not the path we happen to know about.
+
+    Regression cover for a live bug: the page referenced `swagger-ui.css` relatively, which a
+    browser resolves from `<base>/docs` as a sibling of `docs` rather than a child, so every
+    asset 404'd. The old test fetched the asset path directly and never noticed.
+    """
+    page = (await gateway.get(f"{BASE}/docs")).text
+    referenced = _urls_in(page)
+    assert len(referenced) == 3, f"expected css, js and the document, got {referenced}"
+
+    for url in referenced:
+        response = await gateway.get(url, headers=_bearer(OPERATOR_TOKEN))
+        assert response.status_code == 200, (
+            f"the page points at {url}, which answers {response.status_code}"
+        )
+
+
+async def test_the_docs_page_urls_follow_a_forwarded_prefix(gateway: Any) -> None:
+    """Behind `location /cell3/`, the browser must be sent to /cell3/... for everything."""
+    page = (await gateway.get(f"{BASE}/docs", headers={"X-Forwarded-Prefix": "/cell3"})).text
+    assert sorted(_urls_in(page)) == [
+        "/cell3/api/v1/docs/swagger-ui-bundle.js",
+        "/cell3/api/v1/docs/swagger-ui.css",
+        "/cell3/api/v1/openapi.json",
+    ]
 
 
 async def test_the_docs_page_fetches_the_document_with_a_token(gateway: Any) -> None:
     """The shell has to authenticate itself, because the document route is not public."""
     page = (await gateway.get(f"{BASE}/docs")).text
-    assert 'fetch("openapi.json"' in page
+    assert "openapi.json" in page
     assert "Bearer" in page
+
+
+def _urls_in(page: str) -> list[str]:
+    """Every gateway path the page tells a browser to fetch."""
+    return re.findall(r'(?:href|src)="(/[^"]+)"', page) + re.findall(r'fetch\("(/[^"]+)"', page)
 
 
 def _bearer(token: str) -> dict[str, str]:
