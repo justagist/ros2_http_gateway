@@ -68,3 +68,16 @@ def test_online_is_documented_in_help(capsys: pytest.CaptureFixture[str]) -> Non
     with pytest.raises(SystemExit):
         cli.main(["--help"])
     assert "--online" in capsys.readouterr().out
+
+
+def test_dump_openapi_without_check_is_a_usage_error() -> None:
+    """Serving already publishes the document; dumping is the offline path."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--dump-openapi", "out.json", "config.yaml"])
+    assert exc.value.code == 2
+
+
+def test_dump_openapi_is_documented_in_help(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert "--dump-openapi" in capsys.readouterr().out

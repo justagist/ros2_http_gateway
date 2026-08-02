@@ -193,6 +193,44 @@ def test_an_open_event_stream_does_not_hold_shutdown_open(tmp_path: Path) -> Non
     assert "ROS runtime stopped" in output, f"the node was never destroyed:\n{output}"
 
 
+def test_the_docs_and_document_are_served_over_a_real_socket(
+    tmp_path: Path, talker: Talker
+) -> None:
+    """Phase 6a acceptance, minus the browser: fetch the UI, then use what it describes.
+
+    The service call is driven by a path read out of the generated document rather than a
+    hardcoded one, so a document that describes routes the gateway does not serve fails here.
+    """
+    with running(tmp_path, EXECUTORS[0], sse={"include": ["/mission/status"]}) as gateway:
+        page_status, page = gateway.request("/docs", token=None)
+        assert page_status == 200
+        assert "swagger-ui-bundle.js" in page
+        assert "https://" not in page, "the UI must not reach for a CDN"
+
+        assert gateway.request("/docs/swagger-ui-bundle.js", token=None)[0] == 200
+        assert gateway.request("/openapi.json", token=None)[0] == 401
+
+        status, body = gateway.request("/openapi.json")
+        assert status == 200
+        document = json.loads(body)
+        assert document["openapi"] == "3.1.0"
+
+        read_routes = [
+            path
+            for path, operations in document["paths"].items()
+            if "get" in operations and operations["get"].get("tags") == ["topics"]
+        ]
+        assert read_routes, "the document describes no topic reads"
+        assert talker.publish_until(
+            "RUNNING", lambda: gateway.request(read_routes[0])[1].find('"seq":0') == -1
+        )
+        answered = json.loads(gateway.request(read_routes[0])[1])
+        assert answered["data"] == {"data": "RUNNING"}
+        assert set(answered) == {"data", "stamp", "seq", "stale"}, (
+            "the served body must match the documented envelope"
+        )
+
+
 @pytest.mark.bench
 def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
     """Informational soak: a 1 kHz subscription with no HTTP traffic.

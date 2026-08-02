@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ros2_http_gateway</title>
+    <!-- Relative, so a gateway mounted behind a proxy prefix resolves these correctly with
+         no knowledge of the prefix. -->
+    <link rel="stylesheet" href="swagger-ui.css" />
+    <style>
+      body { margin: 0; background: #fafafa; }
+      #gate {
+        font: 14px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; padding: 1.5rem;
+        background: #fff; border: 1px solid #d8dde3; border-radius: 6px;
+      }
+      #gate h1 { margin: 0 0 .5rem; font-size: 1.1rem; }
+      #gate p { color: #4a5561; }
+      #gate input { width: 100%; padding: .5rem; font: inherit; box-sizing: border-box; }
+      #gate button { margin-top: .75rem; padding: .5rem 1rem; font: inherit; cursor: pointer; }
+      #gate .why { font-size: .85rem; }
+      #error { color: #b3232c; min-height: 1.5rem; }
+    </style>
+  </head>
+  <body>
+    <div id="gate">
+      <h1>ros2_http_gateway</h1>
+      <p>
+        Paste a bearer token to load the API description. This gateway does not serve its
+        OpenAPI document unauthenticated, so the token is needed before anything can be
+        rendered.
+      </p>
+      <input id="token" type="password" autocomplete="off" spellcheck="false"
+             placeholder="bearer token" />
+      <div><button id="load" type="button">Load</button></div>
+      <p id="error"></p>
+      <p class="why">
+        The token is held in this page only, for as long as the tab is open. It is sent as
+        <code>Authorization: Bearer</code> on the document fetch and on every "Try it out"
+        request. Nothing is written to storage.
+      </p>
+    </div>
+    <div id="ui"></div>
+    <script src="swagger-ui-bundle.js"></script>
+    <script>
+      (function () {
+        var gate = document.getElementById("gate");
+        var input = document.getElementById("token");
+        var error = document.getElementById("error");
+
+        function render(spec, token) {
+          gate.remove();
+          window.ui = SwaggerUIBundle({
+            spec: spec,
+            dom_id: "#ui",
+            deepLinking: true,
+            tryItOutEnabled: true,
+            // Kept out of the URL bar and off the wire in any other form.
+            requestInterceptor: function (request) {
+              request.headers.Authorization = "Bearer " + token;
+              return request;
+            },
+          });
+        }
+
+        function load() {
+          var token = input.value.trim();
+          if (!token) {
+            error.textContent = "A token is required.";
+            return;
+          }
+          error.textContent = "Loading…";
+          fetch("openapi.json", { headers: { Authorization: "Bearer " + token } })
+            .then(function (response) {
+              if (response.status === 401) throw new Error("That token was not recognised.");
+              if (response.status === 403) {
+                throw new Error("That token holds no role used by any endpoint.");
+              }
+              if (!response.ok) throw new Error("The gateway answered " + response.status + ".");
+              return response.json();
+            })
+            .then(function (spec) { render(spec, token); })
+            .catch(function (failure) { error.textContent = failure.message; });
+        }
+
+        document.getElementById("load").addEventListener("click", load);
+        input.addEventListener("keydown", function (event) {
+          if (event.key === "Enter") load();
+        });
+        input.focus();
+      })();
+    </script>
+  </body>
+</html>

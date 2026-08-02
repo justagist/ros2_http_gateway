@@ -1,0 +1,925 @@
+{
+  "components": {
+    "schemas": {
+      "Error": {
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "field": {
+            "description": "The dotted path of the offending field, as the client wrote it, when a `BAD_REQUEST` came from converting the body. Collection elements are marked with `[]`, as in `status[].values[].key`.",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "success": {
+            "const": false
+          }
+        },
+        "required": [
+          "success",
+          "error_code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "GoalAccepted": {
+        "properties": {
+          "goal_id": {
+            "description": "Namespaced to this endpoint: an id issued by one endpoint cannot be read through another's routes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal_id"
+        ],
+        "type": "object"
+      },
+      "example_interfaces.action.Fibonacci_Feedback.read": {
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {
+            "items": {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sequence"
+        ],
+        "title": "example_interfaces/action/Fibonacci_Feedback",
+        "type": "object"
+      },
+      "example_interfaces.action.Fibonacci_Goal.write": {
+        "additionalProperties": false,
+        "properties": {
+          "order": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          }
+        },
+        "title": "example_interfaces/action/Fibonacci_Goal",
+        "type": "object"
+      },
+      "example_interfaces.action.Fibonacci_Result.read": {
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {
+            "items": {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sequence"
+        ],
+        "title": "example_interfaces/action/Fibonacci_Result",
+        "type": "object"
+      },
+      "example_interfaces.msg.String.read": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "example_interfaces/msg/String",
+        "type": "object"
+      },
+      "example_interfaces.msg.String.write": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "string"
+          }
+        },
+        "title": "example_interfaces/msg/String",
+        "type": "object"
+      },
+      "std_srvs.srv.Trigger_Request.write": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "std_srvs/srv/Trigger_Request",
+        "type": "object"
+      },
+      "std_srvs.srv.Trigger_Response.read": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "message"
+        ],
+        "title": "std_srvs/srv/Trigger_Response",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "A token from the gateway's `auth.tokens`. Compared against the configured SHA-256 digests in constant time.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Every route below is generated from one YAML file: nothing is exposed unless it is configured.\n\n**Status codes.** A 4xx means the request never crossed into ROS -- retrying it unchanged will\nfail the same way. A 503 means a capacity limit was reached and retrying later may not. A 200\nmeans the request did reach ROS, and `error_code` carries the outcome, because \"the service\ntimed out\" is a result rather than a protocol error.\n\n**Authentication.** `Authorization: Bearer <token>`, except for `GET /health`. The event\nstream additionally accepts `?access_token=` for browser `EventSource`.\n",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "summary": "Config-driven, authenticated HTTP + SSE gateway for ROS 2.",
+    "title": "ros2_http_gateway",
+    "version": "0.0.0-golden"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/call": {
+      "post": {
+        "description": "Calls `/gateway_test_service` (`std_srvs/srv/Trigger`) and waits up to 5000 ms. A timed-out request is withdrawn, so a late reply cannot be mistaken for the answer to a later call.",
+        "operationId": "callCall",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/std_srvs.srv.Trigger_Request.write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error_code": {
+                      "description": "Null on success.",
+                      "enum": [
+                        "TIMEOUT",
+                        "SERVICE_UNAVAILABLE",
+                        null
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "response": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/std_srvs.srv.Trigger_Response.read"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "success": {
+                      "description": "Whether the gateway completed the call, not whether the robot agreed with it. A service answering `success: false` in its own response is still `true` here, with its fields under `response`.",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "message",
+                    "error_code",
+                    "response"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The call was authorised and well formed. `error_code` carries the ROS-side outcome."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Malformed body, or a value the target field cannot hold. `error_code` is one of `BAD_REQUEST`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          }
+        },
+        "summary": "Call /gateway_test_service",
+        "tags": [
+          "services"
+        ]
+      }
+    },
+    "/cmd": {
+      "post": {
+        "description": "Publishes the request body to `/gateway_test_command` (`example_interfaces/msg/String`). Returns once the message is queued for the ROS thread; a publisher cannot know whether anyone received it.",
+        "operationId": "publishCmd",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/example_interfaces.msg.String.write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queued for publication."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Malformed body, or a value the target field cannot hold. `error_code` is one of `BAD_REQUEST`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The ROS side is not draining published messages fast enough. `error_code` is one of `PUBLISH_QUEUE_FULL`."
+          }
+        },
+        "summary": "Publish to /gateway_test_command",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "description": "On connect, one snapshot per included endpoint, then deltas:\n\n* `event: /mission/status` -- the body of `GET /mission/status`, byte for byte.\n\nA comment frame every 15 seconds keeps proxies from idling the connection out. Only the newest sample of an endpoint is streamed, so `seq` may skip; immediately after the snapshot one frame may repeat or precede a snapshot's `seq`, because subscription happens before the snapshot is built.\n\n**Each client sees only the endpoints its own roles permit.** A token holding none of them is refused.\n\nOverflow policy is `drop_oldest`; past `max_clients` (32) the route answers 503.",
+        "operationId": "streamEvents",
+        "parameters": [
+          {
+            "description": "For browser `EventSource`, which cannot set headers. This is the only route that accepts it. Requests authenticated this way are marked in the audit record; the query string itself is never logged.",
+            "in": "query",
+            "name": "access_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The event stream."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The stream is at its configured client limit. `error_code` is one of `TOO_MANY_CLIENTS`."
+          }
+        },
+        "summary": "Stream every included endpoint over one connection",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "The only unauthenticated route.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "endpoints": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "executor": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "ok"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "executor",
+                    "endpoints"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The gateway is serving."
+          }
+        },
+        "security": [],
+        "summary": "Liveness, and which executor was chosen",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/mission/status": {
+      "get": {
+        "description": "The latest cached sample of `/gateway_test_state` (`example_interfaces/msg/String`). Flagged `stale` once the newest sample is more than 1000 ms old.\n\nBefore any message arrives this answers 200 with `\"data\": null` rather than 404: the endpoint is configured and reachable, the topic is simply quiet. Stale data is returned flagged rather than withheld.",
+        "operationId": "readMissionStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/example_interfaces.msg.String.read"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "seq": {
+                      "description": "Monotonic per endpoint, 0 before the first sample.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "stale": {
+                      "description": "True when the newest sample is older than `stale_after_ms`, and always true before the first sample arrives.",
+                      "type": "boolean"
+                    },
+                    "stamp": {
+                      "description": "Wall-clock time the sample arrived. Null before the first.",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "stamp",
+                    "seq",
+                    "stale"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The newest cached sample."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          }
+        },
+        "summary": "Read the latest sample of /gateway_test_state",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/never/stales": {
+      "get": {
+        "description": "The latest cached sample of `/gateway_test_state` (`example_interfaces/msg/String`). No staleness bound is configured, so `stale` is always false.\n\nBefore any message arrives this answers 200 with `\"data\": null` rather than 404: the endpoint is configured and reachable, the topic is simply quiet. Stale data is returned flagged rather than withheld.",
+        "operationId": "readNeverStales",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/example_interfaces.msg.String.read"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "seq": {
+                      "description": "Monotonic per endpoint, 0 before the first sample.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "stale": {
+                      "description": "True when the newest sample is older than `stale_after_ms`, and always true before the first sample arrives.",
+                      "type": "boolean"
+                    },
+                    "stamp": {
+                      "description": "Wall-clock time the sample arrived. Null before the first.",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "stamp",
+                    "seq",
+                    "stale"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The newest cached sample."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          }
+        },
+        "summary": "Read the latest sample of /gateway_test_state",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/pick": {
+      "post": {
+        "description": "Submits a goal to `/gateway_test_action` (`example_interfaces/action/Fibonacci`). 202 means the server accepted it, not that it finished: poll the status route or read the feedback stream. The 5000 ms timeout bounds the accept/reject handshake only, never the goal itself.\n\nA terminal goal stays queryable for 300 s and then answers 404, the same as an id that never existed.",
+        "operationId": "submitPick",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/example_interfaces.action.Fibonacci_Goal.write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request reached ROS, which would not start the goal. `error_code` is one of `GOAL_REJECTED`, `SERVICE_UNAVAILABLE`."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalAccepted"
+                }
+              }
+            },
+            "description": "The action server accepted the goal."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Malformed body, or a value the target field cannot hold. `error_code` is one of `BAD_REQUEST`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          }
+        },
+        "summary": "Submit a goal to /gateway_test_action",
+        "tags": [
+          "actions"
+        ]
+      }
+    },
+    "/pick/{goal_id}": {
+      "delete": {
+        "description": "Never gated by preconditions: a state gate able to stop an operator aborting a goal would be the opposite of a safety feature.",
+        "operationId": "cancelPick",
+        "parameters": [
+          {
+            "description": "The id returned when the goal was submitted.",
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error_code": {
+                      "description": "Null on success.",
+                      "enum": [
+                        "CANCEL_REJECTED",
+                        "ALREADY_TERMINAL",
+                        null
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "message",
+                    "error_code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The server accepted the cancellation, or explained why not."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such goal, or its result has been evicted. `error_code` is one of `UNKNOWN_GOAL`."
+          }
+        },
+        "summary": "Request cancellation of a goal",
+        "tags": [
+          "actions"
+        ]
+      },
+      "get": {
+        "operationId": "statusPick",
+        "parameters": [
+          {
+            "description": "The id returned when the goal was submitted.",
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "last_feedback": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/example_interfaces.action.Fibonacci_Feedback.read"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/example_interfaces.action.Fibonacci_Result.read"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "description": "A terminal status always comes with a `result`: the gateway keeps reporting the running status until it holds both.",
+                      "enum": [
+                        "accepted",
+                        "executing",
+                        "canceling",
+                        "succeeded",
+                        "aborted",
+                        "canceled"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "result",
+                    "last_feedback"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The goal as the gateway currently sees it."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such goal, or its result has been evicted. `error_code` is one of `UNKNOWN_GOAL`."
+          }
+        },
+        "summary": "Read a goal's status, result and newest feedback",
+        "tags": [
+          "actions"
+        ]
+      }
+    },
+    "/pick/{goal_id}/stream": {
+      "get": {
+        "description": "Server-sent events: `event: feedback` frames carrying the feedback message, then exactly one `event: terminal` frame carrying `{\"status\": ..., \"result\": ...}`, then the stream closes.\n\nThe per-client backlog is 64 frames and a slow reader loses its **oldest** feedback, so gaps are expected behaviour rather than a fault. The terminal frame is never dropped.",
+        "operationId": "streamPick",
+        "parameters": [
+          {
+            "description": "The id returned when the goal was submitted.",
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The feedback stream."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, malformed or unknown bearer token. `error_code` is one of `UNAUTHENTICATED`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The token's roles do not include one this endpoint requires. `error_code` is one of `FORBIDDEN`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such goal, or its result has been evicted. `error_code` is one of `UNKNOWN_GOAL`."
+          }
+        },
+        "summary": "Stream a goal's feedback until it finishes",
+        "tags": [
+          "actions"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ]
+}

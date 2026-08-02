@@ -92,7 +92,12 @@ version = { attr = "ros2_http_gateway._version.__version__" }
 packages = ["ros2_http_gateway"]
 
 [tool.setuptools.package-data]
-ros2_http_gateway = ["py.typed", "config.schema.json"]
+ros2_http_gateway = [
+  "py.typed",
+  "config.schema.json",
+  # Swagger UI, vendored rather than pulled from a CDN: 1.7MB, licences alongside it.
+  "static/swagger/*",
+]
 
 [tool.ruff]
 line-length = 100

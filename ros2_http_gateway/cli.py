@@ -10,7 +10,8 @@ import argparse
 import logging
 import sys
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from ._version import __version__
 from .ros_env import RosEnvironmentError, require_rclpy
@@ -27,6 +28,8 @@ examples:
                                                  when every endpoint pins its `type:`
   ros2-http-gateway --check --online config.yaml also check pinned types against the
                                                  live graph, on the robot
+  ros2-http-gateway --check --dump-openapi api.json
+                                                 write the OpenAPI document and exit
 """
 
 
@@ -49,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --check, also verify pinned `type:` values against the live ROS graph "
         "(a deploy-time smoke test; the default check is hermetic)",
+    )
+    parser.add_argument(
+        "--dump-openapi",
+        metavar="PATH",
+        help="with --check, write the generated OpenAPI 3.1 document to PATH and exit "
+        "(`-` for stdout). Byte-identical for a given config, so a CI job can diff it",
     )
     parser.add_argument(
         "--discovery-timeout",
@@ -77,6 +86,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("a config file is required")
     if args.online and not args.check:
         parser.error("--online only applies to --check; serving always uses the live graph")
+    if args.dump_openapi and not args.check:
+        parser.error(
+            "--dump-openapi only applies to --check; a running gateway serves the "
+            "document at <base_path>/openapi.json"
+        )
 
     try:
         require_rclpy()
@@ -100,7 +114,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     if args.check:
-        _report_check(resolved, online=args.online)
+        if args.dump_openapi:
+            _dump_openapi(resolved, args.dump_openapi)
+        # Suppressed when the document went to stdout, which is then the whole output and
+        # pipeable into jq without a stray report to strip first.
+        if args.dump_openapi != "-":
+            _report_check(resolved, online=args.online)
         return 0
 
     from .server import serve
@@ -111,6 +130,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The executor choice can only be validated once rclpy is being brought up.
         print(f"error: {exc.format()}", file=sys.stderr)
         return 1
+
+
+def dump_bytes(document: dict[str, Any]) -> bytes:
+    """Encode an OpenAPI document for ``--dump-openapi``.
+
+    Indented and key-sorted, so the output is diffable and byte-identical across runs whatever
+    order the generator happened to build it in.
+    """
+    import orjson
+
+    return orjson.dumps(document, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
+
+
+def _dump_openapi(resolved: ResolvedConfig, target: str) -> None:
+    """Write the OpenAPI document without starting the server."""
+    from .openapi import build_document
+
+    body = dump_bytes(build_document(resolved))
+    if target == "-":
+        sys.stdout.buffer.write(body)
+        return
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    print(f"wrote {path} ({len(body)} bytes)")
 
 
 def _report_check(resolved: ResolvedConfig, *, online: bool = False) -> None:

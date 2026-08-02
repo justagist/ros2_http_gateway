@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the golden converter-source files under test/golden/.
+"""Regenerate the golden files under test/golden/: converter sources and the OpenAPI document.
 
 Run after any intentional change to the code generator, then read the diff. A diff you
 cannot explain is a bug in the generator, not a stale golden file.
@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "test"))
 
 from rosidl_runtime_py.utilities import get_message  # noqa: E402
 from test_codegen import GOLDEN_TYPES  # noqa: E402
+from test_openapi import GOLDEN, golden_bytes  # noqa: E402
 
 from ros2_http_gateway.codegen import dict_to_msg_source, msg_to_dict_source  # noqa: E402
 
@@ -38,6 +40,10 @@ def main() -> int:
         target = out_dir / f"{type_name.replace('/', '__')}.py.txt"
         target.write_text(text, encoding="utf-8")
         print(f"wrote {target.relative_to(REPO_ROOT)}")
+
+    with tempfile.TemporaryDirectory() as scratch:
+        GOLDEN.write_bytes(golden_bytes(Path(scratch)))
+    print(f"wrote {GOLDEN.relative_to(REPO_ROOT)}")
     return 0
 
 

@@ -285,9 +285,30 @@ For a stream the latency is the time to accept the connection, not its lifetime.
 
 ## OpenAPI
 
-`GET <base>/openapi.json` serves an OpenAPI 3.1 document generated at startup from the
-config and the introspected interface types. Swagger UI is served from `<base>/docs` from
-vendored assets, with no CDN.
+`GET <base>/openapi.json` serves an OpenAPI 3.1 document generated at startup from the config
+and the introspected interface types. The schemas in it are the same ones the generated
+converters were built from, so it describes what the gateway actually accepts and emits.
 
-Both honour the ASGI `root_path` and `X-Forwarded-Prefix`, so a gateway mounted at
-`location /cell3/` in nginx advertises and links prefix-correct URLs.
+**The document requires a token**, like every route but `/health`. Served openly it would hand
+an anonymous caller the whole surface: paths, ROS names, types and required roles. Any
+authenticated caller sees all of it, including endpoints their roles cannot use -- deliberate,
+because 403-versus-404 already lets them enumerate the same list by asking.
+
+3.1 rather than 3.0 because its schema dialect *is* JSON Schema 2020-12, so a nullable float,
+a wide integer accepted as string-or-number, and a base64 byte array all survive into the
+document unaltered.
+
+Swagger UI is served from `<base>/docs` from vendored assets, with no CDN. The page itself is
+unauthenticated -- a browser cannot send a header on a navigation, and the shell describes
+nothing -- so it asks for a token and fetches the document with it. The token stays in the page
+for the life of the tab and is never written to storage.
+
+`servers` and every asset reference honour the ASGI `root_path` and `X-Forwarded-Prefix`, so a
+gateway mounted at `location /cell3/` in nginx advertises `/cell3/api/v1` and its "Try it out"
+requests land on the right URLs. `X-Forwarded-Prefix` wins when both are present: a proxy
+asserting a prefix knows better than a `root_path` fixed at startup.
+
+`ros2-http-gateway --check --dump-openapi api.json config.yaml` writes the same document
+without starting the server, key-sorted and indented so a CI job can diff it. Pass `-` to write
+it to stdout instead, in which case the usual `--check` report is suppressed and the output is
+the document alone.

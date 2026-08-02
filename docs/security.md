@@ -82,6 +82,22 @@ Not a design goal, but the obvious footguns are bounded:
 
 There is no rate limiting and no request size limit. Put both in the reverse proxy.
 
+## The OpenAPI document and Swagger UI
+
+- `<base>/openapi.json` is authenticated. An anonymous caller cannot enumerate the configured
+  surface from it.
+- Any authenticated caller sees the whole document, including endpoints their roles cannot use.
+  This is deliberate rather than an oversight: an unknown path answers 404 and a known one with
+  the wrong role answers 403, so the same list is already enumerable by asking. Per-role
+  filtering would be theatre while that is true.
+- `<base>/docs` serves an unauthenticated HTML shell, because a browser cannot attach a header
+  to a top-level navigation. The shell contains no information about the API; it prompts for a
+  token and fetches the document with it. The token is held in the page for the life of the tab,
+  never in `localStorage` or `sessionStorage`, and never placed in a URL.
+- Swagger UI is vendored (~1.7 MB under `ros2_http_gateway/static/swagger/`, Apache-2.0, notices
+  alongside it). Nothing is fetched from a CDN, so the browser talks only to your gateway, and a
+  test asserts the served page contains no external URL.
+
 ## Reporting
 
 Security issues: open a GitHub issue for anything already public, or email the maintainer

@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Any, Final
 
 import orjson
@@ -33,6 +34,7 @@ from .auth import (
     bearer_token,
 )
 from .codegen import ConversionError
+from .openapi import build_document
 from .params import apply_bindings
 from .policy import PolicyEngine, build_policy
 from .resolve import ResolvedConfig, ResolvedEndpoint
@@ -50,6 +52,15 @@ __all__ = ["build_app"]
 
 _JSON: Final = "application/json"
 _ORJSON_OPTS: Final = orjson.OPT_SERIALIZE_NUMPY
+
+# Vendored Swagger UI. Only these are served, by name: a directory served by pattern is one
+# path-traversal bug away from serving the config file.
+_DOCS_DIR: Final = Path(__file__).parent / "static" / "swagger"
+_DOCS_ASSETS: Final = {
+    "docs": ("index.html", "text/html; charset=utf-8"),
+    "docs/swagger-ui.css": ("swagger-ui.css", "text/css"),
+    "docs/swagger-ui-bundle.js": ("swagger-ui-bundle.js", "text/javascript"),
+}
 
 # How long a stream may say nothing before a comment frame is sent.
 _HEARTBEAT_S: Final = 15.0
@@ -149,9 +160,26 @@ def build_app(
             )
         )
 
+    document = build_document(resolved)
+    everyone = frozenset[str]().union(
+        *(endpoint.config.roles for endpoint in resolved.endpoints.values())
+    )
+    routes.append(
+        Route(
+            f"{base}/openapi.json",
+            _guard(
+                _openapi(document, base), everyone, "/openapi.json", audit, authenticator, policy
+            ),
+            methods=["GET"],
+        )
+    )
+    routes.extend(_docs_routes(base))
+
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.goals = goals
     app.state.sse = broadcaster
+    app.state.openapi = document
+    app.state.audit_path = resolved.config.audit.path
     return app
 
 
@@ -641,3 +669,62 @@ def _goal_cancel(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalReg
         )
 
     return cancel
+
+
+# --------------------------------------------------------------------------------------
+# the generated description of everything above
+# --------------------------------------------------------------------------------------
+
+
+def _openapi(document: dict[str, Any], base: str) -> Handler:
+    """Serve the document generated at startup, with ``servers`` correct for this request.
+
+    Authenticated like every other route. Unauthenticated it would hand an anonymous caller the
+    whole surface -- paths, ROS names, types and required roles -- which is the one thing a
+    deny-by-default gateway should not volunteer. Any authenticated caller sees all of it,
+    including endpoints their roles cannot use; that is deliberate, since 403-versus-404 already
+    lets them enumerate the same list by asking.
+    """
+    encoded: dict[str, bytes] = {}
+
+    async def openapi(request: Request) -> Response:
+        prefix = _external_prefix(request)
+        body = encoded.get(prefix)
+        if body is None:
+            served = dict(document)
+            served["servers"] = [{"url": f"{prefix}{base}" or "/"}]
+            body = encoded[prefix] = orjson.dumps(served, option=_ORJSON_OPTS)
+        return Response(body, 200, media_type=_JSON)
+
+    return openapi
+
+
+def _external_prefix(request: Request) -> str:
+    """The path prefix the client reached this gateway through, if it is behind one.
+
+    ``X-Forwarded-Prefix`` first, because a proxy asserting it knows better than the ASGI
+    ``root_path``, which is only set when the server was told about the mount at startup.
+    """
+    forwarded = request.headers.get("x-forwarded-prefix")
+    prefix = forwarded if forwarded is not None else request.scope.get("root_path", "")
+    return prefix.rstrip("/")
+
+
+def _docs_routes(base: str) -> Iterator[Route]:
+    """Swagger UI, served asset by named asset.
+
+    Unauthenticated, unlike the document it renders: the page itself describes nothing, and a
+    browser cannot send an Authorization header for a top-level navigation anyway. It asks for a
+    token and fetches the document with it.
+    """
+    for route, (name, media_type) in _DOCS_ASSETS.items():
+        yield Route(f"{base}/{route}", _asset(_DOCS_DIR / name, media_type), methods=["GET"])
+
+
+def _asset(path: Path, media_type: str) -> Handler:
+    body = path.read_bytes()
+
+    async def asset(_: Request) -> Response:
+        return Response(body, 200, media_type=media_type)
+
+    return asset

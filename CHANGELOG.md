@@ -8,6 +8,25 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- OpenAPI 3.1 document, generated at startup from the config and the same JSON Schemas the
+  converters were built from, served at `<base>/openapi.json`. Every configured endpoint with its
+  methods, the response envelopes, the error codes each route can produce, the four action routes
+  as the async-job pattern, and the event stream with its event names and `?access_token=`.
+- 3.1 rather than 3.0 so the schema dialect is JSON Schema 2020-12: a nullable float, a wide
+  integer accepted as string-or-number and a base64 byte array all survive unaltered. Nested type
+  schemas are hoisted into `components/schemas` with their `$ref`s rewritten, because a `$ref`
+  resolves against the document root and a schema-local `$defs` would silently dangle.
+- The document is authenticated, like every route but `/health`: served openly it would hand an
+  anonymous caller the whole surface. Any authenticated caller sees all of it, since 403-versus-404
+  already lets them enumerate the same list.
+- `--check --dump-openapi PATH` writes it without starting the server, key-sorted and indented so
+  a CI job can diff it; `-` writes to stdout and suppresses the usual report.
+- `servers` and the UI's asset references honour `root_path` and `X-Forwarded-Prefix`, so a gateway
+  behind `location /cell3/` advertises prefix-correct URLs and "Try it out" reaches them.
+- Swagger UI at `<base>/docs`, vendored (~1.7 MB, Apache-2.0, notices alongside it) with no CDN.
+  The page is unauthenticated because a browser cannot set a header on a navigation; it asks for a
+  token, fetches the document with it, and keeps it in the page rather than in storage.
+
 - The global event stream is served at `sse.path` (default `/api/v1/events`): one snapshot per
   included endpoint on connect, then deltas. `data` is byte-identical to the endpoint's GET
   body, because the same memoised encoding backs both.

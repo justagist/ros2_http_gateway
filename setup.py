@@ -34,7 +34,9 @@ setup(
     # plain string here, it stays a string. test_packaging.py pins this down.
     python_requires=">=3.10",
     packages=[PACKAGE_NAME],
-    package_data={PACKAGE_NAME: ["py.typed", "config.schema.json"]},
+    package_data={
+        PACKAGE_NAME: ["py.typed", "config.schema.json", "static/swagger/*"],
+    },
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{PACKAGE_NAME}"]),
         (f"share/{PACKAGE_NAME}", ["package.xml"]),
