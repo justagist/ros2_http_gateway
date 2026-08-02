@@ -13,7 +13,9 @@ All notable changes to this project are documented here. Format follows
   wallet and role filtering, the auth matrix grid, a tile's staleness countdown and expiry, a write
   round-tripping into its read tile, the gate flipping both ways with the call agreeing, a goal
   through feedback to a result, cancel and re-cancel, TTL eviction, both stream transports and the
-  heartbeat difference between them, and slow-consumer mode. Deselected by default.
+  heartbeat difference between them, and slow-consumer mode. Deselected by default, and playwright
+  sits in its own `e2e` extra rather than in `dev` so a browserless CI leg skips the module instead
+  of failing in it.
 - Startup checks on anything derived from config or from another layer raise instead of asserting,
   so `python -O` is a supported way to run this. The full suite passes under it.
 

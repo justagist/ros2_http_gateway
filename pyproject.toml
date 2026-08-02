@@ -63,14 +63,16 @@ dev = [
   "pytest-asyncio>=0.23",
   "pytest-benchmark>=4.0",
   "httpx>=0.27",
-  # Drives the console in a real browser for the `e2e` suite, which is deselected by default.
-  # Needs `playwright install chromium` once; nothing else in the project imports it.
-  "playwright>=1.40",
   "types-pyyaml",
   "types-jsonschema",
   "build",
   "tomli>=2.0; python_version < '3.11'",
 ]
+# Deliberately not part of `dev`: CI installs `[dev]` on every leg, and a playwright that is
+# installed but browserless would make the `e2e` suite stop skipping and start failing the moment
+# anything selected it. Kept separate, `pytest.importorskip` remains a guard that actually works.
+# One-time setup: `pip install -e '.[dev,e2e]' && playwright install chromium`.
+e2e = ["playwright>=1.40"]
 
 [project.urls]
 Homepage = "https://github.com/justagist/ros2_http_gateway"

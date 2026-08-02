@@ -4,11 +4,14 @@ Everything else about the console is tested either side of the DOM: its logic th
 server through pytest. This is the wiring between them -- the part where a working manifest and
 working logic still leave you with a blank page.
 
-    pip install playwright && playwright install chromium
+    pip install -e '.[dev,e2e]' && playwright install chromium
     pytest -m e2e
 
-Deselected by default (`-m 'not e2e'` in the pytest config) because it needs a browser download,
-starts two ROS processes and takes about a minute.
+Two guards keep it out of CI, because it needs a 115 MB browser, starts two ROS processes and takes
+about a minute. `-m 'not e2e'` in the pytest config deselects it -- but a command line passing its
+own `-m` overrides that, so the second guard is the one that matters: playwright lives in its own
+`e2e` extra that CI never installs, and the `importorskip` below then skips the module rather than
+failing in a browserless environment.
 """
 
 from __future__ import annotations

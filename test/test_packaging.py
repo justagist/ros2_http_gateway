@@ -121,3 +121,16 @@ def test_every_runtime_dependency_carries_a_justification() -> None:
                 unjustified.append(line)
             justified = False
     assert not unjustified
+
+
+def test_playwright_is_not_a_dev_dependency() -> None:
+    """CI installs `[dev]` on every leg, and a browserless playwright is worse than none.
+
+    With it present, `pytest.importorskip` in `test_console_e2e.py` succeeds and the module runs as
+    far as `chromium.launch()` before failing. The `-m 'not e2e'` deselection in the pytest config
+    does not save it either: a command line passing its own `-m` overrides addopts. So the extra
+    being separate is the guard that holds, and this is what keeps it separate.
+    """
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "playwright" not in str(extras["dev"]), "playwright belongs in the e2e extra"
+    assert any("playwright" in requirement for requirement in extras["e2e"])
