@@ -8,6 +8,20 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- `bench/`: one command (`python3 bench/run.py`) produces a markdown results table with the
+  machine, the ROS distro, the RMW and the load driver recorded alongside the numbers, and exits
+  non-zero if a budget asserted by an earlier phase is breached.
+- Scenarios: cached topic `GET` throughput and latency percentiles, an unauthenticated refusal for
+  comparison, service round trip gated and ungated (interleaved, so neither inherits the other's
+  warm-up), precondition cost in process, converter speedup against `rosidl_runtime_py`, event
+  stream fan-out at 1/8/32 clients, and the 1 kHz subscription soak measured both quiet and
+  subscribed with per-thread attribution.
+- `oha` or `wrk` are used when either is on `PATH`, otherwise a built-in asyncio driver spread over
+  four worker processes. Which one ran is recorded, because the numbers are not comparable across
+  drivers and the client shares the machine with the gateway either way.
+- Reference numbers checked in as `bench/RESULTS.md`. Notably 32 stream clients cost 1.7x the CPU
+  of one, which is what "encode once, fan out bytes" was for.
+
 - OpenAPI 3.1 document, generated at startup from the config and the same JSON Schemas the
   converters were built from, served at `<base>/openapi.json`. Every configured endpoint with its
   methods, the response envelopes, the error codes each route can produce, the four action routes

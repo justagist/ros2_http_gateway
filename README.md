@@ -122,6 +122,28 @@ expensive work (config validation, type resolution, converter code generation, r
 policy table construction, OpenAPI generation) happens at startup, so a request is
 lookups and precompiled code only.
 
+## Performance
+
+Measured with `python3 bench/run.py` on a 24-core i7-14650HX, Jazzy, `rmw_fastrtps_cpp`; the
+full table and its caveats are in [bench/RESULTS.md](bench/RESULTS.md).
+
+| | |
+|---|---|
+| Cached topic `GET` | 11.8k req/s, p99 3.8 ms |
+| Service round trip | p50 0.91 ms, p99 1.65 ms |
+| State precondition | +10 us end to end, 1.1 us p99 measured on its own |
+| `msg -> dict` (`sensor_msgs/Imu`) | 1.2 us, 44x `rosidl_runtime_py` |
+| Event stream, 32 clients | 6.2k events/s for 18.7% of one core |
+| Idle, no traffic | 0.5% of one core |
+
+The event-stream row is the point of "encode once, fan out bytes": 32 clients cost 1.7x the CPU
+of one, because a sample is converted and framed once and the same `bytes` object goes to every
+queue. Throughput figures are a floor -- the load driver shares the machine with the gateway.
+
+One caveat worth knowing before you pick a distro: on Humble a 1 kHz topic costs about 80% of a
+core in rclpy's per-message dispatch, against under 5% on Jazzy and newer. See
+[bench/README.md](bench/README.md).
+
 ## JSON representation
 
 - `uint8[]` and `byte[]` fields become base64 strings.
