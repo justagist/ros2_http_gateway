@@ -76,6 +76,33 @@ results.assembled = fixtures.assemble.map((check) => ({
   ),
 }));
 
+results.frames = fixtures.frames.map((check) => {
+  // Fed one chunk at a time, as a reader delivers them: a frame may straddle any number of reads.
+  let buffer = "";
+  const collected = [];
+  for (const chunk of check.chunks) {
+    const parsed = logic.parseFrames(buffer + chunk);
+    buffer = parsed.rest;
+    collected.push(...parsed.frames);
+  }
+  return { label: check.label, frames: collected, rest: buffer };
+});
+
+results.seq = fixtures.seq.map((check) => {
+  const seen = {};
+  const tracked = check.observed.map((entry) => logic.trackSeq(seen, entry[0], entry[1]));
+  return {
+    label: check.label,
+    gaps: tracked.reduce((total, entry) => total + entry.gap, 0),
+    firsts: tracked.filter((entry) => entry.first).length,
+  };
+});
+
+results.audit = fixtures.audit.map((check) => ({
+  label: check.label,
+  ...logic.auditHint(check.status, check.body, check.token),
+}));
+
 results.filled = fixtures.fill.map((check) => logic.fill(check.url, check.params));
 results.percentiles = logic.percentiles(fixtures.percentiles);
 results.probe = logic.PROBE;

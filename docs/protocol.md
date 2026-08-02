@@ -311,7 +311,9 @@ knowledge of the prefix.
 ### `GET <base>/console`
 
 The console itself: one HTML page plus one CSS and one JS file from package data. No CDN, no
-build step. Unauthenticated, for the same reason as `<base>/docs` -- a browser cannot attach a
+build step. It is a testing tool -- token wallet, auth matrix, topic tiles, schema-driven forms,
+goal cards, an event-stream panel with both transports and a slow-consumer mode -- and every
+widget maps to one feature of this protocol. Unauthenticated, for the same reason as `<base>/docs` -- a browser cannot attach a
 header to a navigation -- and it holds no information about the API: it asks for a token and
 then fetches `whoami` and the manifest, both of which are guarded and audited.
 

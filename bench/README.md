@@ -50,6 +50,21 @@ and anything above about 1% means something in this package is polling.
 rclpy; a `dds.*` or `zenoh` thread implicates the middleware. That distinction is what turned an
 unexplained 111% CPU reading on Humble into a specific, upstream answer.
 
+## The ROS side, as a knob
+
+`bench/ros_side.py` is what generates traffic, and its payload size is a dimension in its own
+right:
+
+```bash
+python3 bench/ros_side.py talker 200 16000    # 200 Hz of 16 KB messages
+```
+
+Message *size* is what makes a slow consumer observable at all. Demonstrating the event stream's
+`overflow` policies means overflowing the gateway's 64-frame per-client queue, and that only
+happens once the kernel's socket buffers are full first. At 200 Hz of 7-byte messages -- 19 KB/s
+against megabytes of buffering -- a reader can stop reading for a minute and never cause a single
+drop. At 16 KB it takes about a second.
+
 ## Adding a scenario
 
 Write a function in `scenarios.py` returning `Row`s, add it to `SCENARIOS` and `_run` in

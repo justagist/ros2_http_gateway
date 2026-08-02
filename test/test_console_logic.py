@@ -176,6 +176,62 @@ def results(schemas: dict[str, Any], tmp_path_factory: pytest.TempPathFactory) -
             {"url": "/api/v1/mission/{command}", "params": {}},
         ],
         "percentiles": [5.0, 1.0, 3.0, 2.0, 4.0],
+        "frames": [
+            {
+                "label": "whole frames",
+                "chunks": ['event: /a\ndata: {"seq":1}\n\nevent: /b\ndata: {"seq":2}\n\n'],
+            },
+            {
+                "label": "split mid-frame",
+                "chunks": ["event: /a\nda", 'ta: {"seq":1}\n', "\n"],
+            },
+            {
+                "label": "heartbeat between events",
+                "chunks": ['event: /a\ndata: {"seq":1}\n\n: keepalive\n\n'],
+            },
+            {"label": "nothing complete yet", "chunks": ["event: /a\ndata: {"]},
+        ],
+        "seq": [
+            {"label": "contiguous", "observed": [["/a", 1], ["/a", 2], ["/a", 3]]},
+            {"label": "one gap of three", "observed": [["/a", 1], ["/a", 5]]},
+            {
+                "label": "two endpoints interleaved",
+                "observed": [["/a", 1], ["/b", 9], ["/a", 2], ["/b", 10]],
+            },
+        ],
+        "audit": [
+            {
+                "label": "no token",
+                "status": 401,
+                "body": {"error_code": "UNAUTHENTICATED"},
+                "token": None,
+            },
+            {
+                "label": "bad token",
+                "status": 401,
+                "body": {"error_code": "UNAUTHENTICATED"},
+                "token": "nope",
+            },
+            {
+                "label": "wrong role",
+                "status": 403,
+                "body": {"error_code": "FORBIDDEN"},
+                "token": "t",
+            },
+            {
+                "label": "gated",
+                "status": 200,
+                "body": {"error_code": "PRECONDITION_FAILED", "message": "data is 'IDLE'"},
+                "token": "t",
+            },
+            {"label": "allowed", "status": 200, "body": {"error_code": None}, "token": "t"},
+            {
+                "label": "ros failure",
+                "status": 200,
+                "body": {"error_code": "TIMEOUT"},
+                "token": "t",
+            },
+        ],
     }
 
     path = tmp_path_factory.mktemp("fixtures") / "fixtures.json"
@@ -358,3 +414,90 @@ def test_the_matrix_probe_is_a_body_no_converter_accepts(
     for key in writes:
         assert schemas[key].get("additionalProperties") is False, key
         assert "__console_probe__" not in (schemas[key].get("properties") or {})
+
+
+# --------------------------------------------------------------------------------------
+# server-sent events, as a reader delivers them
+# --------------------------------------------------------------------------------------
+
+
+@node
+def test_complete_frames_are_parsed(results: dict[str, Any]) -> None:
+    entry = _labelled(results["frames"], "whole frames")
+    assert [(frame["event"], frame["data"]) for frame in entry["frames"]] == [
+        ("/a", '{"seq":1}'),
+        ("/b", '{"seq":2}'),
+    ]
+    assert entry["rest"] == ""
+
+
+@node
+def test_a_frame_split_across_reads_survives(results: dict[str, Any]) -> None:
+    """A chunk boundary can fall anywhere, including mid-word in a field name."""
+    entry = _labelled(results["frames"], "split mid-frame")
+    assert [(frame["event"], frame["data"]) for frame in entry["frames"]] == [("/a", '{"seq":1}')]
+
+
+@node
+def test_a_heartbeat_is_kept_as_itself(results: dict[str, Any]) -> None:
+    """Dropping comment frames would make a quiet stream indistinguishable from a dead one."""
+    entry = _labelled(results["frames"], "heartbeat between events")
+    assert [frame["comment"] for frame in entry["frames"]] == [None, "keepalive"]
+
+
+@node
+def test_an_unterminated_frame_is_held_back(results: dict[str, Any]) -> None:
+    entry = _labelled(results["frames"], "nothing complete yet")
+    assert entry["frames"] == []
+    assert entry["rest"].startswith("event: /a")
+
+
+@node
+def test_gaps_are_counted_per_endpoint(results: dict[str, Any]) -> None:
+    """Each endpoint on the stream has its own counter, so interleaving is not a gap."""
+    by_label = {entry["label"]: entry for entry in results["seq"]}
+    assert by_label["contiguous"]["gaps"] == 0
+    assert by_label["one gap of three"]["gaps"] == 3
+    assert by_label["two endpoints interleaved"]["gaps"] == 0
+    assert by_label["two endpoints interleaved"]["firsts"] == 2
+
+
+# --------------------------------------------------------------------------------------
+# audit hints
+# --------------------------------------------------------------------------------------
+
+
+@node
+def test_the_audit_hint_names_the_decision_and_its_reason(results: dict[str, Any]) -> None:
+    by_label = {entry["label"]: entry for entry in results["audit"]}
+    assert by_label["no token"]["reason"] == "no bearer token"
+    assert by_label["bad token"]["reason"] == "unknown bearer token"
+    assert by_label["wrong role"]["reason"] == "token lacks a required role"
+    assert all(
+        by_label[name]["decision"] == "deny" for name in ("no token", "bad token", "wrong role")
+    )
+
+
+@node
+def test_a_gate_refusal_is_a_denial_with_the_gateways_own_message(results: dict[str, Any]) -> None:
+    entry = _labelled(results["audit"], "gated")
+    assert entry["decision"] == "deny"
+    assert entry["outcome"] == "PRECONDITION_FAILED"
+    assert "IDLE" in entry["reason"]
+
+
+@node
+def test_a_ros_failure_is_still_an_allowed_request(results: dict[str, Any]) -> None:
+    """The gateway allowed it; ROS is what went wrong. The audit records both facts separately."""
+    entry = _labelled(results["audit"], "ros failure")
+    assert entry["decision"] == "allow"
+    assert entry["outcome"] == "TIMEOUT"
+    assert entry["reason"] is None
+
+    allowed = _labelled(results["audit"], "allowed")
+    assert allowed["decision"] == "allow"
+    assert allowed["outcome"] == "ok"
+
+
+def _labelled(entries: list[dict[str, Any]], label: str) -> dict[str, Any]:
+    return next(entry for entry in entries if entry["label"] == label)

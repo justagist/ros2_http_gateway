@@ -28,6 +28,19 @@ All notable changes to this project are documented here. Format follows
   authoritative once it is set.
 - The console's logic sits behind a DOM-free seam and is tested through node against the schemas
   the gateway really generates, since CI has no browser.
+- Goal cards: status by polling, feedback over the goal's own stream (fetch, because that stream
+  needs a bearer header and `EventSource` cannot send one), cancel, `ALREADY_TERMINAL` on a second
+  cancel, the result, a countdown to `result_ttl_s` and then the 404 once evicted. Several at once.
+- An event-stream panel with connect/disconnect, a per-endpoint filter, heartbeats rendered faintly,
+  a seq-gap detector, and a transport toggle between `fetch` with header auth and `EventSource` with
+  the query token. The `EventSource` path also makes visible that the browser swallows comment
+  frames, so heartbeats are invisible on it.
+- Slow-consumer mode stops draining the reader so the gateway's per-client queue fills and the
+  configured `overflow` policy takes over -- `drop_oldest` as gaps in `seq`, `disconnect` as the
+  stream ending.
+- An audit hint under every response and on every auth-matrix row: the decision, outcome and reason
+  the request will have written to the audit log, derived from the answer because the audit sink is
+  deliberately not served. A test compares the derivation against real records.
 
 - `GET <base>/console/manifest`: everything the calling token may touch, and nothing else --
   kind, ROS name and type, roles, path parameters, staleness bound or timeout, `request_map`,

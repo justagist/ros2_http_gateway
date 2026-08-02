@@ -312,17 +312,78 @@
     });
   }
 
+  // Split whatever has arrived into complete server-sent events, returning the unterminated
+  // remainder to be prepended to the next chunk. A frame can straddle any number of reads, and a
+  // comment frame (the heartbeat) carries no data and must survive as itself rather than be
+  // dropped: seeing them is how an operator tells a quiet stream from a dead one.
+  function parseFrames(buffer) {
+    var frames = [];
+    var index = buffer.indexOf("\n\n");
+    while (index >= 0) {
+      var block = buffer.slice(0, index);
+      buffer = buffer.slice(index + 2);
+      var frame = { event: null, data: null, comment: null };
+      block.split("\n").forEach(function (line) {
+        if (line.indexOf(":") === 0) frame.comment = line.slice(1).trim();
+        else if (line.indexOf("event: ") === 0) frame.event = line.slice(7);
+        else if (line.indexOf("data: ") === 0) frame.data = line.slice(6);
+      });
+      if (frame.event !== null || frame.data !== null || frame.comment !== null) {
+        frames.push(frame);
+      }
+      index = buffer.indexOf("\n\n");
+    }
+    return { frames: frames, rest: buffer };
+  }
+
+  // Per-event sequence tracking, because each endpoint on the stream has its own counter. A jump
+  // is a drop, which under `drop_oldest` is expected rather than a fault -- but silent gaps read as
+  // a quiet robot, so the panel counts them.
+  function trackSeq(seen, event, seq) {
+    var previous = seen[event];
+    seen[event] = seq;
+    if (previous === undefined) return { gap: 0, first: true };
+    if (seq <= previous) return { gap: 0, first: false, repeat: true };
+    return { gap: seq - previous - 1, first: false };
+  }
+
+  // What the gateway will have written to its audit log for this request, derived from the answer
+  // rather than read back: the audit sink is a file or stderr and is deliberately not served. The
+  // rules are the guard's own -- authenticate, then role, then policy -- so this stays in step with
+  // it, and a test compares the two against real records.
+  function auditHint(status, body, sentToken) {
+    var code = body && body.error_code ? body.error_code : null;
+    if (status === 401) {
+      return {
+        decision: "deny",
+        reason: sentToken ? "unknown bearer token" : "no bearer token",
+        outcome: code || "UNAUTHENTICATED",
+      };
+    }
+    if (status === 403) {
+      return { decision: "deny", reason: "token lacks a required role", outcome: code || "FORBIDDEN" };
+    }
+    if (code === "PRECONDITION_FAILED") {
+      return { decision: "deny", reason: (body && body.message) || code, outcome: code };
+    }
+    if (status === 0) return { decision: "none", reason: "no answer", outcome: "none" };
+    return { decision: "allow", reason: null, outcome: code || "ok" };
+  }
+
   var logic = {
     PROBE: PROBE,
     assemble: assemble,
+    auditHint: auditHint,
     classify: classify,
     explain: explain,
     extract: extract,
     fill: fill,
     formPlan: formPlan,
     gateVerdict: gateVerdict,
+    parseFrames: parseFrames,
     percentiles: percentiles,
     staleness: staleness,
+    trackSeq: trackSeq,
     validate: validate,
   };
   root.gatewayConsole = logic;
@@ -503,6 +564,7 @@
     manifest.endpoints.forEach(function (endpoint) {
       elements.endpoints.append(card(endpoint));
     });
+    elements.endpoints.append(streamPanel());
   }
 
   function card(endpoint) {
@@ -523,7 +585,7 @@
     if (endpoint.kind === "topic_read") holder.append(readPanel(endpoint));
     else if (endpoint.kind === "topic_write") holder.append(writePanel(endpoint, params));
     else if (endpoint.kind === "service") holder.append(servicePanel(endpoint, params));
-    else holder.append(node("p", "Goal submission and streaming arrive with the next phase.", "note"));
+    else holder.append(actionPanel(endpoint, params));
 
     holder.append(matrixPanel(endpoint, params));
     return holder;
@@ -803,6 +865,311 @@
     return { element: box, refresh: refresh };
   }
 
+  // -------------------------------------------------------------------- actions
+
+  function actionPanel(endpoint, params) {
+    var panel = node("div", "", "panel");
+    var editor = bodyEditor(endpoint, "write");
+    var goals = node("div", "", "goals");
+    var result = resultBox();
+
+    function submit() {
+      var body = editor.read();
+      if (body === null) return Promise.resolve();
+      return send("POST", logic.fill(endpoint.url, params), { body: body }).then(function (answer) {
+        result.show(answer);
+        if (answer.status === 202) goals.prepend(goalCard(endpoint, answer.body.goal_id));
+      });
+    }
+
+    panel.append(
+      editor.element,
+      editor.problems,
+      controls([button("Submit goal", submit)]),
+      result.element,
+      goals
+    );
+    return panel;
+  }
+
+  // One card per goal, several at once. Status comes from polling and feedback from the goal's own
+  // stream, which is the split the protocol describes: a terminal status always arrives with its
+  // result, so the card can stop polling the moment it sees one.
+  function goalCard(endpoint, goalId) {
+    var card = node("article", "", "goal");
+    var heading = node("h3", goalId.slice(0, 8), "goal-id");
+    var status = node("div", "submitted", "goal-status");
+    var feedback = node("div", "", "goal-feedback");
+    var body = node("pre", "", "goal-result");
+    var audit = node("div", "", "audit-hint");
+    var ttl = node("div", "", "goal-ttl");
+    var statusUrl = logic.fill(endpoint.routes.status.replace("{goal_id}", goalId), {});
+    var streamUrl = logic.fill(endpoint.routes.stream.replace("{goal_id}", goalId), {});
+    var cancelUrl = logic.fill(endpoint.routes.cancel.replace("{goal_id}", goalId), {});
+    var terminalAt = null;
+    var poller = null;
+    var closed = false;
+
+    function poll() {
+      return send("GET", statusUrl).then(function (answer) {
+        card.className = "goal outcome-" + answer.outcome;
+        if (answer.status === 404) {
+          status.textContent = "404 -- evicted, its result has aged out";
+          stop();
+          return;
+        }
+        if (answer.status !== 200) {
+          status.textContent = answer.status + " " + logic.explain(answer.outcome);
+          return;
+        }
+        status.textContent = answer.body.status;
+        if (answer.body.result !== null) {
+          body.textContent = JSON.stringify(answer.body.result, null, 2);
+          if (terminalAt === null) terminalAt = Date.now();
+        }
+        // A terminal status implies the result is present, so nothing further will change until
+        // the TTL evicts it. Keep one slow poll running to catch the 404 when it does.
+        if (terminalAt !== null && poller) {
+          window.clearInterval(poller);
+          poller = window.setInterval(poll, 2000);
+          poller = poller;
+        }
+      });
+    }
+
+    function stop() {
+      closed = true;
+      if (poller) window.clearInterval(poller);
+      poller = null;
+    }
+
+    function paintTtl() {
+      if (terminalAt === null || closed) return;
+      var ttlMs = (manifest.actions.result_ttl_s || 0) * 1000;
+      var left = Math.max(0, ttlMs - (Date.now() - terminalAt));
+      ttl.textContent = "evicted in " + Math.ceil(left / 1000) + " s";
+    }
+
+    // Feedback over fetch, not EventSource: the per-goal stream needs a bearer header, and
+    // EventSource cannot send one. It ends itself with a terminal event.
+    readStream(streamUrl, function (frame) {
+      if (frame.comment !== null) return;
+      if (frame.event === "terminal") {
+        var ending = JSON.parse(frame.data);
+        status.textContent = ending.status;
+        body.textContent = JSON.stringify(ending.result, null, 2);
+        if (terminalAt === null) terminalAt = Date.now();
+        return;
+      }
+      var data = JSON.parse(frame.data);
+      feedback.textContent = "feedback: " + JSON.stringify(data);
+    }).catch(function () {
+      feedback.textContent = "the feedback stream ended";
+    });
+
+    var cancel = button("Cancel", function () {
+      return send("DELETE", cancelUrl).then(function (answer) {
+        audit.textContent = auditText(answer, activeToken());
+        status.textContent =
+          answer.body && answer.body.error_code
+            ? answer.body.error_code
+            : "cancellation requested";
+        return poll();
+      });
+    });
+
+    card.append(heading, status, feedback, controls([cancel, button("Poll", poll, "secondary")]), ttl, audit, body);
+    poller = window.setInterval(poll, 500);
+    polls["goal:" + goalId] = poller;
+    polls["goal:" + goalId + ":ttl"] = window.setInterval(paintTtl, 500);
+    poll();
+    return card;
+  }
+
+  // ---------------------------------------------------------------- the stream
+
+  // Read an SSE response with fetch, so the token travels in a header. Calls `onFrame` for every
+  // complete frame, including the heartbeat comments EventSource silently swallows.
+  function readStream(url, onFrame, options) {
+    options = options || {};
+    var headers = { Accept: "text/event-stream" };
+    var token = activeToken();
+    if (token) headers.Authorization = "Bearer " + token;
+    return fetch(url, { headers: headers }).then(function (response) {
+      if (!response.ok) throw new Error("the stream answered " + response.status);
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      options.attach && options.attach(reader);
+
+      function pump() {
+        if (options.paused && options.paused()) {
+          // Not reading is the point: TCP backpressure reaches the gateway, its per-client queue
+          // fills, and the configured overflow policy is what happens next.
+          return new Promise(function (resolve) {
+            window.setTimeout(resolve, 200);
+          }).then(pump);
+        }
+        return reader.read().then(function (chunk) {
+          if (chunk.done) return;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          var parsed = logic.parseFrames(buffer);
+          buffer = parsed.rest;
+          parsed.frames.forEach(onFrame);
+          return pump();
+        });
+      }
+
+      return pump();
+    });
+  }
+
+  function streamPanel() {
+    var panel = node("section", "", "stream");
+    panel.append(node("h2", "event stream"));
+    if (!manifest.sse) {
+      panel.append(node("p", "No event stream is configured for this token.", "note"));
+      return panel;
+    }
+
+    var log = node("div", "", "stream-log");
+    var stats = node("div", "not connected", "stream-stats");
+    var filter = document.createElement("select");
+    filter.append(new Option("all endpoints", ""));
+    manifest.sse.include.forEach(function (key) {
+      filter.append(new Option(key, key));
+    });
+
+    var transport = document.createElement("select");
+    transport.append(new Option("fetch + header auth", "fetch"));
+    transport.append(new Option("EventSource + ?access_token", "eventsource"));
+
+    var slow = document.createElement("input");
+    slow.type = "checkbox";
+    var slowLabel = document.createElement("label");
+    slowLabel.append(slow, document.createTextNode(" slow consumer (stop reading)"));
+
+    var seen = {};
+    var counts = { frames: 0, gaps: 0, heartbeats: 0 };
+    var source = null;
+    var paused = false;
+    slow.addEventListener("change", function () {
+      paused = slow.checked;
+      if (paused && transport.value === "eventsource") {
+        line(log, "EventSource has no readable side, so it cannot be slowed from here.", "faint");
+      }
+    });
+
+    function record(event, data, isComment) {
+      counts.frames += 1;
+      if (isComment) {
+        counts.heartbeats += 1;
+        line(log, "heartbeat", "faint");
+      } else {
+        var chosen = filter.value;
+        var parsed = JSON.parse(data);
+        var tracked = logic.trackSeq(seen, event, parsed.seq);
+        counts.gaps += tracked.gap;
+        if (!chosen || chosen === event) {
+          line(
+            log,
+            event + "  seq " + parsed.seq + (tracked.gap ? "  (" + tracked.gap + " dropped)" : "") +
+              "  " + JSON.stringify(parsed.data),
+            tracked.gap ? "gapped" : ""
+          );
+        }
+      }
+      stats.textContent =
+        counts.frames + " frames, " + counts.heartbeats + " heartbeats, " + counts.gaps + " dropped";
+    }
+
+    function connect_() {
+      disconnect();
+      counts = { frames: 0, gaps: 0, heartbeats: 0 };
+      seen = {};
+      log.replaceChildren();
+      if (transport.value === "eventsource") {
+        // The browser cannot set a header here, which is the whole reason the route accepts a
+        // query token. It also hides comment frames, so heartbeats are invisible on this path.
+        var url = manifest.sse.url + "?access_token=" + encodeURIComponent(activeToken());
+        source = new EventSource(url);
+        source.onerror = function () {
+          line(log, "EventSource error (it will retry on its own)", "faint");
+        };
+        manifest.sse.include.forEach(function (key) {
+          source.addEventListener(key, function (event) {
+            record(key, event.data, false);
+          });
+        });
+        line(log, "connected with EventSource -- heartbeats are not visible on this transport", "faint");
+        stats.textContent = "connected (EventSource)";
+        return;
+      }
+      var stop = { closed: false };
+      source = stop;
+      line(log, "connected with fetch", "faint");
+      readStream(
+        manifest.sse.url,
+        function (frame) {
+          if (stop.closed) return;
+          record(frame.event, frame.data, frame.comment !== null);
+        },
+        {
+          paused: function () {
+            return paused;
+          },
+          attach: function (reader) {
+            stop.reader = reader;
+          },
+        }
+      ).catch(function (failure) {
+        if (!stop.closed) line(log, failure.message, "gapped");
+      });
+    }
+
+    function disconnect() {
+      if (!source) return;
+      if (source.close) source.close();
+      else {
+        source.closed = true;
+        if (source.reader) source.reader.cancel().catch(function () {});
+      }
+      source = null;
+    }
+
+    panel.append(
+      controls([
+        button("Connect", connect_),
+        button("Disconnect", disconnect, "secondary"),
+        label("transport", transport),
+        label("show", filter),
+        slowLabel,
+      ]),
+      node(
+        "p",
+        "Slow-consumer mode stops draining the reader, so the gateway's per-client queue fills and " +
+          "its `" + manifest.sse.overflow + "` policy takes over: drop_oldest shows as gaps in seq, " +
+          "disconnect ends the stream.",
+        "note"
+      ),
+      stats,
+      log
+    );
+    return panel;
+  }
+
+  function label(text, control) {
+    var element = document.createElement("label");
+    element.append(document.createTextNode(text + " "), control);
+    return element;
+  }
+
+  function line(log, text, className) {
+    var entry = node("div", text, "stream-line " + (className || ""));
+    log.prepend(entry);
+    while (log.childElementCount > 200) log.lastElementChild.remove();
+  }
+
   // ------------------------------------------------------------- the auth matrix
 
   function matrixPanel(endpoint, params) {
@@ -835,7 +1202,12 @@
     var probe = endpoint.method === "GET" ? undefined : logic.PROBE;
     table.replaceChildren();
     var head = document.createElement("tr");
-    head.append(node("th", "identity"), node("th", "status"), node("th", "meaning"));
+    head.append(
+      node("th", "identity"),
+      node("th", "status"),
+      node("th", "meaning"),
+      node("th", "audit")
+    );
     table.append(head);
 
     var chain = Promise.resolve();
@@ -844,10 +1216,12 @@
         return send(endpoint.method, url, { token: attempt.token, body: probe }).then(function (answer) {
           var row = document.createElement("tr");
           row.className = "outcome-" + answer.outcome;
+          var hint = logic.auditHint(answer.status, answer.body, attempt.token);
           row.append(
             node("td", attempt.label),
             node("td", String(answer.status || "-")),
-            node("td", meaning(answer, probe !== undefined))
+            node("td", meaning(answer, probe !== undefined)),
+            node("td", hint.decision + (hint.reason ? " -- " + hint.reason : ""), "audit-hint")
           );
           table.append(row);
         });
@@ -871,17 +1245,19 @@
 
   function resultBox() {
     var element = node("div", "", "result");
-    var line = node("div", "", "result-line");
+    var headline = node("div", "", "result-line");
+    var audit = node("div", "", "audit-hint");
     var body = node("pre", "", "result-body");
     var extra = node("div", "", "result-note");
-    element.append(line, extra, body);
+    element.append(headline, audit, extra, body);
     return {
       element: element,
       show: function (answer) {
         element.className = "result outcome-" + answer.outcome;
-        line.textContent =
+        headline.textContent =
           (answer.status || "-") + " -- " + logic.explain(answer.outcome) +
           " -- " + answer.ms.toFixed(1) + " ms";
+        audit.textContent = auditText(answer, activeToken());
         body.textContent = answer.body === null ? "" : JSON.stringify(answer.body, null, 2);
         extra.textContent = "";
         return answer;
@@ -890,6 +1266,16 @@
         extra.textContent = text;
       },
     };
+  }
+
+  // What this request will have written to the audit log, derived rather than read back: the sink
+  // is a file or stderr and is deliberately not served over HTTP.
+  function auditText(answer, sentToken) {
+    var hint = logic.auditHint(answer.status, answer.body, sentToken);
+    return (
+      "audit: decision=" + hint.decision + " outcome=" + hint.outcome +
+      (hint.reason ? " reason=" + hint.reason : "")
+    );
   }
 
   function controls(children) {

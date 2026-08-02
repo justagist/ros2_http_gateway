@@ -473,3 +473,94 @@ async def test_the_probe_does_not_bypass_the_guard(gateway: httpx.AsyncClient) -
     assert (await gateway.post(entry["url"], json=PROBE)).status_code == 401
     forbidden = await gateway.post(entry["url"], json=PROBE, headers=bearer(VIEWER_TOKEN))
     assert forbidden.status_code == 403
+
+
+# --------------------------------------------------------------------------------------
+# the console's audit hints against the real records
+# --------------------------------------------------------------------------------------
+
+
+async def test_the_audit_hint_matches_what_the_gateway_writes(
+    gateway: httpx.AsyncClient, served: Any
+) -> None:
+    """The console derives the audit line from the response; here it is checked against the file.
+
+    The sink is stderr or a file and is deliberately not served, so the console cannot read a
+    record back -- it reproduces the guard's own rules instead. That only stays true if something
+    compares the two, which is this. `console.js` keeps the derivation in `auditHint`; the
+    expectations below are that function's contract, stated in Python.
+    """
+    audit_path: Path = served[2]
+    manifest = await manifest_for(gateway, OPERATOR_TOKEN)
+    write = next(e for e in manifest["endpoints"] if e["kind"] == "topic_write")
+    read = next(e for e in manifest["endpoints"] if e["kind"] == "topic_read")
+    # url, body, token, expected status, decision, reason, outcome
+    cases = [
+        (read["url"], None, None, 401, "deny", "no bearer token", "UNAUTHENTICATED"),
+        (read["url"], None, "nope", 401, "deny", "unknown bearer token", "UNAUTHENTICATED"),
+        (
+            write["url"],
+            PROBE,
+            VIEWER_TOKEN,
+            403,
+            "deny",
+            "token lacks a required role",
+            "FORBIDDEN",
+        ),
+        (read["url"], None, OPERATOR_TOKEN, 200, "allow", None, "ok"),
+    ]
+    for url, body, token, status, *_ in cases:
+        headers = bearer(token) if token else {}
+        answer = (
+            await gateway.get(url, headers=headers)
+            if body is None
+            else await gateway.post(url, json=body, headers=headers)
+        )
+        assert answer.status_code == status, f"{url} -> {answer.status_code}"
+
+    # The writer is asynchronous and batches, so neither counting records beforehand nor waiting
+    # for "four more" is sound: an earlier test's records may still be in flight, and its last one
+    # could look like the last of these. Wait for a tail whose shape matches what was just sent.
+    wanted = [
+        ("GET" if body is None else "POST", url, status) for url, body, _, status, *_ in cases
+    ]
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        fresh = _records(audit_path)[-len(cases) :]
+        shape = [(record["method"], record["path"], record["status"]) for record in fresh]
+        if shape == wanted:
+            break
+    else:
+        raise AssertionError(f"the audit tail never matched {wanted}: {shape}")
+
+    for record, (*_, decision, reason, outcome) in zip(fresh, cases, strict=True):
+        assert record["decision"] == decision, record
+        assert record["reason"] == reason, record
+        assert record["outcome"] == outcome, record
+
+
+async def test_a_gate_refusal_is_audited_as_a_denial_with_its_message(
+    gateway: httpx.AsyncClient, served: Any
+) -> None:
+    """The one hint the console cannot guess a fixed string for: it echoes the gateway's message."""
+    audit_path: Path = served[2]
+    manifest = await manifest_for(gateway, OPERATOR_TOKEN)
+    gated = next(e for e in manifest["endpoints"] if e.get("preconditions"))
+
+    response = await gateway.post(
+        gated["url"].replace("{command}", "start"), json={}, headers=bearer(OPERATOR_TOKEN)
+    )
+    assert response.json()["error_code"] == "PRECONDITION_FAILED"
+
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        gated_records = [
+            record for record in _records(audit_path) if record["outcome"] == "PRECONDITION_FAILED"
+        ]
+        if gated_records:
+            record = gated_records[-1]
+            assert record["decision"] == "deny"
+            # What the console shows as the reason is the response's own message.
+            assert record["reason"] == response.json()["message"]
+            return
+    raise AssertionError("the gate refusal was not audited")

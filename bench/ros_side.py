@@ -5,7 +5,7 @@ Kept out of the driver so a scenario that only pushes HTTP is never slowed by an
 sharing its interpreter. Prints one line, ``ready``, once its entities are up.
 
 Usage:
-    python3 bench/ros_side.py talker [rate_hz]
+    python3 bench/ros_side.py talker [rate_hz] [payload_bytes]
     python3 bench/ros_side.py service
     python3 bench/ros_side.py talker service
 """
@@ -27,7 +27,11 @@ TRIGGER_SERVICE = "/bench_trigger"
 
 def main(argv: list[str]) -> int:
     roles = {argument for argument in argv if not argument.isdigit()}
-    rate_hz = next((float(argument) for argument in argv if argument.isdigit()), 200.0)
+    numbers = [int(argument) for argument in argv if argument.isdigit()]
+    rate_hz = float(numbers[0]) if numbers else 200.0
+    # A payload big enough to matter: demonstrating a slow consumer means overflowing the kernel's
+    # socket buffers, which a handful of bytes per message never will.
+    payload = numbers[1] if len(numbers) > 1 else 0
 
     context = rclpy.context.Context()
     context.init()
@@ -49,7 +53,7 @@ def main(argv: list[str]) -> int:
         if publisher is None:
             threading.Event().wait()
         message = String()
-        message.data = "RUNNING"
+        message.data = "RUNNING" if not payload else "R" * payload
         period = 1.0 / rate_hz
         while True:
             publisher.publish(message)

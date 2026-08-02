@@ -72,11 +72,42 @@ There is deliberately no shorter `gateway` alias: console scripts are generated 
 same entry points for wheel installs, so an alias would claim `~/.local/bin/gateway` on
 every `pip install`. Typing the full name beats grabbing a generic one.
 
-## Quickstart
+## Quickstart: the two-terminal tour
+
+The demo node brings up one of everything -- a mission state cycling IDLE/RUNNING, a chatter
+topic at 2 Hz, a `std_srvs/Trigger` service and a deliberately slow Fibonacci action -- and
+`examples/demo.yaml` exposes all of it with an operator and a viewer token.
 
 ```bash
-ros2-http-gateway --check examples/dev.yaml   # validate, exit 0/1, no server started
-ros2-http-gateway examples/dev.yaml           # serve on http://127.0.0.1:8080/api/v1
+# terminal 1
+ros2 run ros2_http_gateway ros2-http-gateway-demo
+
+# terminal 2
+ros2-http-gateway examples/demo.yaml
+```
+
+Then either poke it with curl:
+
+```bash
+curl -H 'Authorization: Bearer demo-operator-token' \
+  http://127.0.0.1:8080/api/v1/mission/status
+```
+
+or open <http://127.0.0.1:8080/api/v1/console> and paste `demo-operator-token`. Paste
+`demo-viewer-token` instead and the write, the service and the action vanish from the page,
+because the console is built from a manifest filtered to the token's roles.
+
+The service is gated on the live mission state, so `POST /api/v1/mission/start` flips between
+success and `PRECONDITION_FAILED` every eight seconds as the demo cycles, and the console shows
+the state it is gating on beside the button.
+
+Interactive API docs are at `/api/v1/docs`, the OpenAPI document at `/api/v1/openapi.json`.
+
+### Validating a config without starting anything
+
+```bash
+ros2-http-gateway --check examples/demo.yaml               # exit 0/1
+ros2-http-gateway --check --dump-openapi api.json examples/demo.yaml
 ```
 
 `--check` resolves every interface type, compiles every converter and checks every
@@ -86,39 +117,41 @@ as a CI gate; add `--online` on the robot to also verify those pinned types agai
 live graph. Full format in [docs/configuration.md](docs/configuration.md), wire protocol in
 [docs/protocol.md](docs/protocol.md).
 
-```bash
-curl -H 'Authorization: Bearer dev-token-change-me' \
-  http://127.0.0.1:8080/api/v1/mission/status
-```
+## The test console
 
-Interactive docs are served from `/api/v1/docs`, the raw document from
-`/api/v1/openapi.json`.
+Off unless `http.console: true`, and deliberately a testing tool rather than an HMI: every widget
+maps to one protocol feature, and there is no dashboard, chart or saved layout anywhere in it.
+Everything is discovered from `<base>/console/manifest` and the schemas in the OpenAPI document,
+so nothing about an endpoint is hardcoded.
 
-## Demo tour
-
-Two terminals and a browser, against a demo node that publishes a cycling mission state, chats
-at 2 Hz, answers a service and serves a deliberately slow action:
-
-```bash
-ros2 run ros2_http_gateway ros2-http-gateway-demo   # terminal 1
-ros2-http-gateway examples/demo.yaml                # terminal 2
-```
-
-Then open <http://127.0.0.1:8080/api/v1/console> and paste `demo-operator-token`. Everything the
-console shows is discovered from `<base>/console/manifest`, filtered to that token's roles --
-paste `demo-viewer-token` instead and the write, the service and the action disappear from the
-page, because a token is never told about an endpoint it cannot use.
-
-The service is gated on the live mission state, so it flips between success and
-`PRECONDITION_FAILED` every eight seconds as the demo cycles:
-
-```bash
-curl -sS -X POST -H 'Authorization: Bearer demo-operator-token' \
-  -d '{}' http://127.0.0.1:8080/api/v1/mission/start
-```
-
-The console is a testing tool -- auth matrix, schema-driven forms, goal cards, a stream panel --
-and is off unless `http.console: true`. It is deliberately not an HMI.
+- A **token wallet**: several labelled tokens, one active, switchable in place. They live in the
+  browser's local storage, which the page says plainly.
+- An **auth matrix** per endpoint: fire as nobody, as a bad token, and as each saved token, and
+  read the 401/401/403/2xx grid. Anything that is not a GET is probed with a body no converter
+  accepts, so an authorised token shows 400 -- proof the token and its roles passed, with nothing
+  published, called or submitted.
+- **Topic tiles** with the sample, its `seq` and stamp, a countdown to `stale_after_ms` and a tile
+  that visibly flips when it expires. Manual GET or auto-poll.
+- **Schema-driven forms** for writes and services, built from the served write schemas. Flat fields
+  and one level of nesting get widgets; arrays and anything deeper fall back to a raw JSON editor
+  validated in the browser against the same schema.
+- **The protocol taxonomy, visibly**: a 4xx that never reached ROS, a 503 capacity limit, a 200
+  refused by a state gate, a 200 carrying a ROS-side error, and a plain success all look different.
+- **Gated commands** show the live value of their precondition's state topic beside the button, and
+  predict the gateway's decision the way the gateway makes it.
+- Per-call latency, and a hammer button (20 sequential calls, p50/p95).
+- **Goal cards** for actions: status by polling, feedback over the goal's own stream, cancel,
+  `ALREADY_TERMINAL` on a second cancel, the result, a countdown to `result_ttl_s` and then the
+  404 once it is evicted. Several goals at once.
+- **An event-stream panel**: connect and disconnect, filter by endpoint, heartbeats rendered
+  faintly, a seq-gap detector, and a transport toggle between `fetch` with header auth and
+  `EventSource` with the query token -- which also makes visible that `EventSource` cannot show
+  you a heartbeat, because the browser swallows comment frames.
+- **Slow-consumer mode**: stop draining the reader and watch the configured `overflow` policy
+  happen -- `drop_oldest` as gaps in `seq`, `disconnect` as the stream ending.
+- **An audit hint** under every response: the `decision`, `outcome` and reason this request will
+  have written to the audit log, derived from the answer rather than read back, since the audit
+  sink is deliberately not served over HTTP.
 
 ## Supported versions
 
