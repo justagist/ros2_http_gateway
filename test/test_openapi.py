@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -133,33 +133,19 @@ def test_every_configured_endpoint_appears(document: dict[str, Any]) -> None:
     assert sorted(paths["/pick/{goal_id}"]) == ["delete", "get"]
 
 
-def test_the_routes_in_the_document_are_the_routes_the_app_serves(tmp_path: Path) -> None:
+async def test_the_routes_in_the_document_are_the_routes_the_app_serves(
+    gateway: Any, served: Any
+) -> None:
     """The document is generated separately from the router, so they can drift."""
-    from ros2_http_gateway.app import build_app
-    from ros2_http_gateway.audit import AuditLogger
-    from ros2_http_gateway.auth import StaticTokenAuthenticator
-    from ros2_http_gateway.config import AuditConfig
-    from ros2_http_gateway.runtime import RosRuntime
-
-    resolved = resolved_config(tmp_path, sse={"include": ["/mission/status"]})
-    runtime = RosRuntime(resolved)
-    runtime.start()
-    try:
-        app = build_app(
-            resolved,
-            runtime,
-            AuditLogger(AuditConfig(sink="stderr", path=None)),
-            StaticTokenAuthenticator(resolved.config.tokens),
-        )
-        base = resolved.config.http.base_path
-        served = {
-            (method, route.path.removeprefix(base))
-            for route in app.routes
-            for method in route.methods or ()
-            if method not in ("HEAD", "OPTIONS")
-        }
-    finally:
-        runtime.stop()
+    resolved = served[0]
+    app = gateway._transport.app
+    base = resolved.config.http.base_path
+    routes = {
+        (method, route.path.removeprefix(base))
+        for route in app.routes
+        for method in route.methods or ()
+        if method not in ("HEAD", "OPTIONS")
+    }
 
     described = {
         (method.upper(), path)
@@ -172,7 +158,7 @@ def test_the_routes_in_the_document_are_the_routes_the_app_serves(tmp_path: Path
         ("GET", "/docs/swagger-ui.css"),
         ("GET", "/docs/swagger-ui-bundle.js"),
     }
-    assert served - assets - {("GET", "/openapi.json")} == described
+    assert routes - assets - {("GET", "/openapi.json")} == described
 
 
 def test_the_action_routes_describe_the_async_job_pattern(document: dict[str, Any]) -> None:
@@ -372,23 +358,40 @@ def test_the_dump_matches_the_golden_document(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------------------
 
 
-@pytest.fixture
-async def gateway(tmp_path: Path) -> AsyncIterator[Any]:
-    """The app over a real ROS runtime, driven through httpx."""
-    import httpx
+@pytest.fixture(scope="module")
+def served(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Any]:
+    """One ROS runtime for the whole module.
 
-    from ros2_http_gateway.app import build_app
-    from ros2_http_gateway.audit import AuditLogger
-    from ros2_http_gateway.auth import StaticTokenAuthenticator
-    from ros2_http_gateway.config import AuditConfig
+    Deliberately not per test: each context created and destroyed is another chance to trip
+    Humble's teardown crash, which took a whole CI run down once. Nothing here mutates ROS state,
+    so one runtime serves every test in this file.
+    """
     from ros2_http_gateway.runtime import RosRuntime
 
+    tmp_path = tmp_path_factory.mktemp("serving")
     audit_path = tmp_path / "audit.jsonl"
     resolved = resolved_config(
         tmp_path, sse=GOLDEN_SSE, audit={"sink": "file", "path": str(audit_path)}
     )
     runtime = RosRuntime(resolved)
     runtime.start()
+    try:
+        yield resolved, runtime, audit_path
+    finally:
+        runtime.stop()
+
+
+@pytest.fixture
+async def gateway(served: Any) -> AsyncIterator[Any]:
+    """A fresh app and client over the shared runtime."""
+    import httpx
+
+    from ros2_http_gateway.app import build_app
+    from ros2_http_gateway.audit import AuditLogger
+    from ros2_http_gateway.auth import StaticTokenAuthenticator
+    from ros2_http_gateway.config import AuditConfig
+
+    resolved, runtime, audit_path = served
     audit = AuditLogger(AuditConfig(sink="file", path=audit_path))
     await audit.start()
     app = build_app(resolved, runtime, audit, StaticTokenAuthenticator(resolved.config.tokens))
@@ -399,7 +402,6 @@ async def gateway(tmp_path: Path) -> AsyncIterator[Any]:
         finally:
             app.state.sse.close()
             await audit.stop()
-            runtime.stop()
 
 
 async def test_the_document_route_needs_a_token(gateway: Any) -> None:
@@ -425,8 +427,13 @@ async def test_reading_the_document_is_audited(gateway: Any) -> None:
     await gateway.get(f"{BASE}/openapi.json", headers=_bearer(OPERATOR_TOKEN))
     for _ in range(60):
         await asyncio.sleep(0.005)
-        if (records := _audit_records(gateway)) and records[-1]["path"].endswith("openapi.json"):
-            assert records[-1]["decision"] == "allow"
+        allowed = [
+            record
+            for record in _audit_records(gateway)
+            if record["path"].endswith("/openapi.json") and record["decision"] == "allow"
+        ]
+        if allowed:
+            assert allowed[-1]["user"] == "operator-user"
             return
     raise AssertionError("the document route was not audited")
 
