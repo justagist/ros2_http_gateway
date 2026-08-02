@@ -8,6 +8,27 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- The console's request/response half, entirely discovered from the manifest and the served
+  schemas: a labelled multi-token wallet in local storage with a visible warning, an identity chip
+  from `whoami`, topic tiles with a staleness countdown that flips the tile, schema-driven forms
+  for writes and services with a validated raw-JSON fallback for arrays and deeper structures,
+  per-call latency and a 20-call hammer reporting p50/p95.
+- The auth matrix fires each endpoint as nobody, as a bad token and as every saved token. Anything
+  that is not a GET is probed with a body no converter accepts, so the authorised row reads 400 --
+  the token and its roles were accepted and nothing was published, called or submitted. A gated
+  endpoint refuses even earlier and reads 200 with `PRECONDITION_FAILED`.
+- Response outcomes are rendered as the protocol's own distinctions: 4xx never reached ROS, 503 hit
+  a capacity limit, 200 with `PRECONDITION_FAILED` was refused by a state gate before ROS, 200 with
+  another `error_code` reached ROS and came back unhappy, and a plain 200 worked.
+- Gated commands show the live value of their precondition's state topic beside the button and
+  predict the decision the way the policy engine makes it, including its three refusals: unlisted
+  parameter value, stale state, and nothing published yet.
+- Staleness is measured from when the browser received a sample, never from the server's wall-clock
+  stamp, so a skewed client clock cannot grey out a live tile. The server's own `stale` flag stays
+  authoritative once it is set.
+- The console's logic sits behind a DOM-free seam and is tested through node against the schemas
+  the gateway really generates, since CI has no browser.
+
 - `GET <base>/console/manifest`: everything the calling token may touch, and nothing else --
   kind, ROS name and type, roles, path parameters, staleness bound or timeout, `request_map`,
   precondition summaries, stream membership, and an action's four derived routes. Schemas are

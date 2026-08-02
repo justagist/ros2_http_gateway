@@ -427,3 +427,49 @@ def _records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [orjson.loads(line) for line in path.read_bytes().decode().splitlines() if line.strip()]
+
+
+# --------------------------------------------------------------------------------------
+# the auth matrix's probe
+# --------------------------------------------------------------------------------------
+
+
+PROBE = {"__console_probe__": True}
+
+
+async def test_the_matrix_probe_is_refused_by_every_write_endpoint(
+    gateway: httpx.AsyncClient,
+) -> None:
+    """The console fires this at anything that is not a GET, so it must never execute.
+
+    An unknown field is rejected rather than ignored, so the converter refuses the body and no
+    message is ever built -- but the refusal happens *after* authentication and the role check, so
+    a 400 here still proves the token was accepted and authorised. If this ever returned 2xx the
+    console's auth matrix would be publishing, calling and submitting goals as a side effect of
+    rendering a grid.
+    """
+    manifest = await manifest_for(gateway, OPERATOR_TOKEN)
+    writes = [entry for entry in manifest["endpoints"] if entry["method"] != "GET"]
+    assert writes, "the test config has no write endpoints"
+
+    for entry in writes:
+        url = entry["url"].replace("{command}", "start").replace("{a}", "1").replace("{b}", "2")
+        response = await gateway.post(url, json=PROBE, headers=bearer(OPERATOR_TOKEN))
+        body = response.json()
+        # 400 when the converter refused the body. A gated endpoint refuses even earlier, before
+        # the body is read at all, which is a 200 carrying an error_code. What must never happen is
+        # a 200 with `error_code: null`, because that is the operation having actually run.
+        assert response.status_code in (200, 400), f"{entry['path']} -> {response.status_code}"
+        assert body["error_code"] in ("BAD_REQUEST", "PRECONDITION_FAILED"), (
+            f"{entry['path']} answered {body}"
+        )
+
+
+async def test_the_probe_does_not_bypass_the_guard(gateway: httpx.AsyncClient) -> None:
+    """401 and 403 still come first, which is what makes the grid's first two rows meaningful."""
+    manifest = await manifest_for(gateway, OPERATOR_TOKEN)
+    entry = next(e for e in manifest["endpoints"] if e["kind"] == "topic_write")
+
+    assert (await gateway.post(entry["url"], json=PROBE)).status_code == 401
+    forbidden = await gateway.post(entry["url"], json=PROBE, headers=bearer(VIEWER_TOKEN))
+    assert forbidden.status_code == 403

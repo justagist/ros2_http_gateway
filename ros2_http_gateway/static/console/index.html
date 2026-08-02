@@ -11,22 +11,33 @@
   <body>
     <header>
       <h1>ros2_http_gateway</h1>
+      <div id="wallet" class="wallet"></div>
       <div id="identity" class="chip">no token</div>
     </header>
 
     <section id="gate">
-      <p>
-        Paste a bearer token. Everything on this page is discovered from
-        <code>/console/manifest</code>, which is filtered to that token's roles: endpoints it
-        cannot use are not listed.
-      </p>
-      <input id="token" type="password" autocomplete="off" spellcheck="false"
-             placeholder="bearer token" />
-      <button id="connect" type="button">Connect</button>
+      <div class="row">
+        <label>
+          label
+          <input id="label" type="text" autocomplete="off" spellcheck="false" placeholder="hmi-1" />
+        </label>
+        <label>
+          token
+          <input id="token" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="bearer token" />
+        </label>
+        <button id="connect" type="button">Add and connect</button>
+      </div>
       <p id="error" class="error"></p>
+      <p class="warning">
+        <strong>Saved tokens are kept in this browser's local storage</strong>, in plain text, so
+        the auth matrix can fire as each of them. Anything with access to this profile can read
+        them. Use throwaway tokens, and do not enable this console on a production cell.
+      </p>
       <p class="note">
-        This is a testing tool, not an HMI. The token is held in the page for as long as the tab
-        is open and is not written to storage.
+        Everything below is discovered from <code>/console/manifest</code> and the schemas in the
+        OpenAPI document, filtered to the active token's roles. This is a testing tool, not an
+        HMI.
       </p>
     </section>
 
