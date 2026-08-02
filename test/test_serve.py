@@ -247,7 +247,16 @@ def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
         )
         time.sleep(0.5)
 
+        # Truly idle first, with nobody publishing. This is the measurement that catches a
+        # busy-wait: a gateway with no traffic should cost approximately nothing, and whether the
+        # cost under load is per-message work or a spin is only visible by comparing the two.
         pid = gateway.process.pid
+        quiet_cpu = cpu_seconds(Path(f"/proc/{pid}/stat"))
+        quiet_start = time.monotonic()
+        time.sleep(2.0)
+        quiet_elapsed = time.monotonic() - quiet_start
+        quiet_percent = (cpu_seconds(Path(f"/proc/{pid}/stat")) - quiet_cpu) / quiet_elapsed * 100
+
         start_cpu = cpu_seconds(Path(f"/proc/{pid}/stat"))
         start_threads = per_thread(pid)
         start = time.monotonic()
@@ -268,7 +277,10 @@ def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
         for thread, after in end_threads.items()
     )[::-1]
     breakdown = ", ".join(f"{thread} {share:.0f}%" for share, thread in busiest[:4] if share >= 1.0)
-    print(f"\n  published {rate:.0f} msg/s, gateway used {percent:.1f}% of one core")
+    print(
+        f"\n  quiet: {quiet_percent:.1f}% of one core with nothing publishing"
+        f"\n  published {rate:.0f} msg/s, gateway used {percent:.1f}% of one core"
+    )
     for share, thread in busiest:
         if share >= 1.0:
             print(f"    {thread:28s} {share:5.1f}%")
@@ -276,7 +288,8 @@ def test_idle_cpu_with_a_1khz_topic(tmp_path: Path, talker: Talker) -> None:
         # The breakdown rides on the warning because a quiet run prints nothing: attributing the
         # cost to a thread is the difference between a number and a lead.
         warnings.warn(
-            f"idle CPU {percent:.1f}% of one core at {rate:.0f} msg/s, above the "
-            f"{_CPU_WARN_PERCENT}% informational threshold; busiest threads: {breakdown}",
+            f"idle CPU {percent:.1f}% of one core at {rate:.0f} msg/s ({quiet_percent:.1f}% "
+            f"with nothing publishing), above the {_CPU_WARN_PERCENT}% informational threshold; "
+            f"busiest threads: {breakdown}",
             stacklevel=1,
         )
