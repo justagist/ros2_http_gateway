@@ -63,7 +63,11 @@
           "minLength": 1
         },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "base_path": { "$ref": "#/$defs/basePath" }
+        "base_path": { "$ref": "#/$defs/basePath" },
+        "console": {
+          "description": "Serve the built-in test console and its manifest. Off unless asked for.",
+          "type": "boolean"
+        }
       }
     },
     "ros": {

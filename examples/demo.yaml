@@ -1,0 +1,84 @@
+# The demo tour: everything the gateway does, against `ros2-http-gateway-demo`.
+#
+#   terminal 1:  ros2 run ros2_http_gateway ros2-http-gateway-demo
+#   terminal 2:  ros2-http-gateway examples/demo.yaml
+#   browser:     http://127.0.0.1:8080/api/v1/console
+#
+# Two tokens so role filtering is visible: the operator sees everything below, the viewer sees
+# only the two topic reads. Tokens in the repository and `console: true` make this a demo file
+# and not a deployment one -- see locked_down.yaml for that.
+#
+#   operator: demo-operator-token      viewer: demo-viewer-token
+
+defaults:
+  roles: [operator]
+
+endpoints:
+  # Cycles IDLE -> RUNNING -> IDLE every 8 s, which is what opens and closes the gate below.
+  /mission/status:
+    topic: /mission/state
+    type: example_interfaces/msg/String
+    roles: [viewer, operator]
+    stale_after_ms: 3000
+
+  /chatter:
+    topic: /chatter
+    type: example_interfaces/msg/String
+    roles: [viewer, operator]
+    stale_after_ms: 3000
+
+  # A write whose effect shows up in the /chatter read tile above. The demo node publishes
+  # there every 0.5 s, so your message is visible until the next one lands.
+  /chatter/say:
+    topic: /chatter
+    type: example_interfaces/msg/String
+    method: POST
+    roles: [operator]
+
+  # Gated on the live state: `start` only while IDLE, `abort` only while RUNNING, `reset` always.
+  # Watch it flip between 200 and PRECONDITION_FAILED as the demo node cycles.
+  /mission/{command}:
+    service: /mission_control
+    type: std_srvs/srv/Trigger
+    method: POST
+    roles: [operator]
+    timeout_ms: 2000
+    preconditions:
+      - state_endpoint: /mission/status
+        field: data
+        allow:
+          start: [IDLE]
+          abort: [RUNNING]
+          reset: ["*"]
+
+  # Deliberately slow, so feedback, cancel and the goal lifecycle are all watchable.
+  /pick:
+    action: /fibonacci
+    type: example_interfaces/action/Fibonacci
+    roles: [operator]
+
+auth:
+  tokens:
+    # Hashes of "demo-operator-token" and "demo-viewer-token". A plaintext `token:` is accepted
+    # but refused outright when the file is world-readable, which a git checkout always is.
+    - token_sha256: "61112491d046c3f6f8ab801f170d9b2d0c734a17ceff60dee92123fb507cfc3f"
+      user: demo-operator
+      roles: [operator]
+    - token_sha256: "db2c460a3dd812a27b2a7f60d1320322c27ac3b28b3b90b11c05ecc7b4bcc856"
+      user: demo-viewer
+      roles: [viewer]
+
+sse:
+  path: /events
+  include: [/mission/status, /chatter]
+  overflow: drop_oldest
+  max_clients: 8
+
+http:
+  bind: 127.0.0.1
+  port: 8080
+  base_path: /api/v1
+  console: true
+
+audit:
+  sink: stderr

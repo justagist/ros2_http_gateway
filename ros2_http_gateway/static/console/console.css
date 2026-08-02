@@ -1,0 +1,83 @@
+/* Deliberately plain. This is a testing tool, and anything that looks like an HMI invites
+   someone to use it as one. */
+:root {
+  --ink: #1b2027;
+  --muted: #5b6673;
+  --line: #d8dde3;
+  --paper: #fff;
+  --bg: #f6f7f9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+header h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+
+.chip {
+  padding: 0.15rem 0.55rem;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+section, main { max-width: 60rem; margin: 1.25rem auto; padding: 0 1.25rem; }
+
+#gate input {
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+}
+
+#gate button {
+  margin-top: 0.6rem;
+  padding: 0.45rem 1rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.error { color: #b3232c; min-height: 1.4rem; }
+.note { color: var(--muted); font-size: 0.85rem; }
+
+.card {
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 4px;
+}
+
+/* One accent per kind, so the four shapes are distinguishable at a glance. */
+.card.topic_read { border-left-color: #2f7d5a; }
+.card.topic_write { border-left-color: #2a5d9e; }
+.card.service { border-left-color: #8a5a1a; }
+.card.action { border-left-color: #6d3f8f; }
+
+.card h2 {
+  margin: 0 0 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.95rem;
+}
+
+.kind, .type, .facts, .gate { color: var(--muted); font-size: 0.85rem; }
+.type { font-family: ui-monospace, SFMono-Regular, monospace; }
+.gate { margin-top: 0.35rem; color: #8a5a1a; }

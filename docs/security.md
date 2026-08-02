@@ -98,6 +98,25 @@ There is no rate limiting and no request size limit. Put both in the reverse pro
   alongside it). Nothing is fetched from a CDN, so the browser talks only to your gateway, and a
   test asserts the served page contains no external URL.
 
+## The console
+
+Off by default (`http.console: false`), and off means the routes do not exist.
+
+- **The manifest is filtered by role**, which is the strictest listing the gateway serves: a
+  token is not told about an endpoint it cannot use, nor its ROS name, type or stream membership.
+  This is deliberately stronger than the OpenAPI document, which any authenticated caller reads
+  in full -- the document is a byproduct of the config, while the manifest exists to be
+  enumerated by a client.
+- **`/whoami` requires no role**, only a valid token. It reveals the caller's own user and roles
+  and nothing about the system.
+- **The console page is unauthenticated**, like the Swagger UI shell, because a browser cannot
+  attach an Authorization header to a top-level navigation. The page contains no endpoint
+  information; a test asserts the served HTML mentions no ROS name or interface type. Everything
+  it renders comes from the manifest and `/whoami`, both guarded and audited.
+- The token a user pastes into the console lives in the page for the life of the tab. Phase 7b
+  adds a labelled multi-token wallet in `localStorage`; that is a testing convenience with a
+  visible warning, and it is a reason not to enable the console on a production cell.
+
 ## Reporting
 
 Security issues: open a GitHub issue for anything already public, or email the maintainer

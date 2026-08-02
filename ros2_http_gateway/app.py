@@ -34,6 +34,7 @@ from .auth import (
     bearer_token,
 )
 from .codegen import ConversionError
+from .console import build_manifest
 from .openapi import build_document
 from .params import apply_bindings
 from .policy import PolicyEngine, build_policy
@@ -59,6 +60,13 @@ _DOCS_DIR: Final = Path(__file__).parent / "static" / "swagger"
 _DOCS_ASSETS: Final = {
     "docs/swagger-ui.css": ("swagger-ui.css", "text/css"),
     "docs/swagger-ui-bundle.js": ("swagger-ui-bundle.js", "text/javascript"),
+}
+
+# The test console, served only when `http.console` is true. Same rule: named assets, no mount.
+_CONSOLE_DIR: Final = Path(__file__).parent / "static" / "console"
+_CONSOLE_ASSETS: Final = {
+    "console/console.css": ("console.css", "text/css"),
+    "console/console.js": ("console.js", "text/javascript"),
 }
 
 # How long a stream may say nothing before a comment frame is sent.
@@ -173,6 +181,8 @@ def build_app(
         )
     )
     routes.extend(_docs_routes(base))
+    if resolved.config.http.console:
+        routes.extend(_console_routes(resolved, base, everyone, audit, authenticator, policy))
 
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.goals = goals
@@ -283,6 +293,10 @@ def _guard(
     One record per request reaching a configured route. A request matching no route is
     Starlette's 404 and is not audited -- a deliberate gap recorded in docs/security.md.
 
+    An empty ``required`` means any authenticated caller will do, which is what ``/whoami``
+    needs: a token holding a role no endpoint uses is still a valid token and is entitled to be
+    told so.
+
     ``allow_query_token`` is for the SSE route alone: browser ``EventSource`` cannot set
     headers. The record says which way the credential arrived, never what it was.
     """
@@ -307,7 +321,7 @@ def _guard(
                     BAD_CREDENTIAL,
                     _error(401, "UNAUTHENTICATED", "unknown bearer token"),
                 )
-            elif not identity.may(required):
+            elif required and not identity.may(required):
                 denial, response = (
                     MISSING_ROLE,
                     _error(
@@ -755,3 +769,86 @@ def _asset(path: Path, media_type: str) -> Handler:
         return Response(body, 200, media_type=media_type)
 
     return asset
+
+
+# --------------------------------------------------------------------------------------
+# the test console
+# --------------------------------------------------------------------------------------
+
+
+def _console_routes(
+    resolved: ResolvedConfig,
+    base: str,
+    everyone: frozenset[str],
+    audit: AuditLogger,
+    authenticator: Authenticator,
+    policy: PolicyEngine,
+) -> Iterator[Route]:
+    """The console's server side, registered only when ``http.console`` is true.
+
+    Off by default, and off means absent: a disabled console is not a route that answers 403, it
+    is a route that does not exist.
+    """
+
+    def guard(handler: Handler, roles: frozenset[str], path: str) -> Handler:
+        return _guard(handler, roles, path, audit, authenticator, policy)
+
+    # No role requirement: any valid token may ask who it is. Still authenticated, still audited.
+    yield Route(f"{base}/whoami", guard(_whoami(), frozenset(), "/whoami"), methods=["GET"])
+    yield Route(
+        f"{base}/console/manifest",
+        guard(_manifest(resolved), everyone, "/console/manifest"),
+        methods=["GET"],
+    )
+    yield Route(f"{base}/console", _console_page(base), methods=["GET"])
+    for route, (name, media_type) in _CONSOLE_ASSETS.items():
+        yield Route(f"{base}/{route}", _asset(_CONSOLE_DIR / name, media_type), methods=["GET"])
+
+
+def _whoami() -> Handler:
+    """Who this token is, for any token the gateway accepts."""
+
+    async def whoami(request: Request) -> Response:
+        identity: Identity = request.state.identity
+        return _json({"user": identity.user, "roles": sorted(identity.roles)})
+
+    return whoami
+
+
+def _manifest(resolved: ResolvedConfig) -> Handler:
+    """Everything this caller may touch, filtered by role.
+
+    Built per request rather than at startup: it depends on the caller's roles and on the prefix
+    the request arrived through, and it is a page-load path, not a hot one.
+    """
+
+    async def manifest(request: Request) -> Response:
+        identity: Identity = request.state.identity
+        return _json(build_manifest(resolved, identity, prefix=_external_prefix(request)))
+
+    return manifest
+
+
+def _console_page(base: str) -> Handler:
+    """The console shell, with its asset and API URLs made absolute for this request.
+
+    Unauthenticated, exactly like the Swagger UI shell and for the same reason: a browser cannot
+    attach an Authorization header to a top-level navigation, so a guarded page could never be
+    opened. The shell holds no information about the API -- it asks for a token and then fetches
+    `/whoami` and the manifest, both of which are guarded and audited.
+    """
+    template = (_CONSOLE_DIR / "index.html").read_text(encoding="utf-8")
+    rendered: dict[str, bytes] = {}
+
+    async def page(request: Request) -> Response:
+        prefix = _external_prefix(request)
+        body = rendered.get(prefix)
+        if body is None:
+            body = rendered[prefix] = (
+                template.replace("__ASSETS__", f"{prefix}{base}/console")
+                .replace("__API__", f"{prefix}{base}")
+                .encode("utf-8")
+            )
+        return Response(body, 200, media_type="text/html; charset=utf-8")
+
+    return page

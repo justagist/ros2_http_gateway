@@ -6,7 +6,24 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `GET <base>/console/manifest`: everything the calling token may touch, and nothing else --
+  kind, ROS name and type, roles, path parameters, staleness bound or timeout, `request_map`,
+  precondition summaries, stream membership, and an action's four derived routes. Schemas are
+  referenced by component key plus document URL rather than embedded.
+- The manifest is filtered by role, more strictly than the OpenAPI document: an endpoint a token
+  cannot use is absent, and so are its ROS name, its type and its membership of the event stream.
+- `GET <base>/whoami`: the caller's user and roles, for any valid token including one whose role
+  no endpoint uses. The only route with no role requirement.
+- `http.console` (default **false**) serves the test console from package data: one HTML, one CSS,
+  one JS, no CDN and no build step. Off means the routes are not registered at all. Its three
+  paths are reserved for collision checking regardless, so enabling it cannot break a config that
+  already loaded.
+- `ros2 run ros2_http_gateway ros2-http-gateway-demo`: one node with a mission state cycling
+  IDLE/RUNNING, a 2 Hz chatter topic, a `std_srvs/Trigger` service and a deliberately slow
+  Fibonacci action, plus `examples/demo.yaml` exposing all of it with an operator and a viewer
+  token, a state precondition and a two-endpoint event stream.
 
 ## [0.1.0] - 2026-08-02
 

@@ -35,16 +35,25 @@ setup(
     python_requires=">=3.10",
     packages=[PACKAGE_NAME],
     package_data={
-        PACKAGE_NAME: ["py.typed", "config.schema.json", "static/swagger/*"],
+        PACKAGE_NAME: [
+            "py.typed",
+            "config.schema.json",
+            "static/swagger/*",
+            "static/console/*",
+        ],
     },
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{PACKAGE_NAME}"]),
         (f"share/{PACKAGE_NAME}", ["package.xml"]),
-        (f"share/{PACKAGE_NAME}/examples", ["examples/dev.yaml", "examples/locked_down.yaml"]),
+        (
+            f"share/{PACKAGE_NAME}/examples",
+            ["examples/dev.yaml", "examples/locked_down.yaml", "examples/demo.yaml"],
+        ),
     ],
     entry_points={
         "console_scripts": [
             f"ros2-http-gateway = {PACKAGE_NAME}.cli:main",
+            f"ros2-http-gateway-demo = {PACKAGE_NAME}.demo_node:main",
         ],
     },
 )

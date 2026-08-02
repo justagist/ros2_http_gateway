@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ros2_http_gateway console</title>
+    <!-- __ASSETS__ and __API__ are substituted per request with the prefix this gateway was
+         reached through. Relative URLs would resolve against the parent of /console. -->
+    <link rel="stylesheet" href="__ASSETS__/console.css" />
+  </head>
+  <body>
+    <header>
+      <h1>ros2_http_gateway</h1>
+      <div id="identity" class="chip">no token</div>
+    </header>
+
+    <section id="gate">
+      <p>
+        Paste a bearer token. Everything on this page is discovered from
+        <code>/console/manifest</code>, which is filtered to that token's roles: endpoints it
+        cannot use are not listed.
+      </p>
+      <input id="token" type="password" autocomplete="off" spellcheck="false"
+             placeholder="bearer token" />
+      <button id="connect" type="button">Connect</button>
+      <p id="error" class="error"></p>
+      <p class="note">
+        This is a testing tool, not an HMI. The token is held in the page for as long as the tab
+        is open and is not written to storage.
+      </p>
+    </section>
+
+    <main id="endpoints" hidden></main>
+    <script src="__ASSETS__/console.js" data-api="__API__"></script>
+  </body>
+</html>

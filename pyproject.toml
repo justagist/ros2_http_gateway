@@ -75,13 +75,14 @@ Repository = "https://github.com/justagist/ros2_http_gateway"
 Changelog = "https://github.com/justagist/ros2_http_gateway/blob/main/CHANGELOG.md"
 
 [project.scripts]
-# Exactly one name, and it is namespaced. A second `gateway` alias would make
-# `ros2 run ros2_http_gateway gateway` prettier, but console scripts are generated from
-# these entry points for wheel installs too, so every `pip install` would claim
-# ~/.local/bin/gateway. setup.cfg's install_scripts redirect only affects the
-# colcon/setup.py path, not wheels. Under colcon this script still lands in
-# lib/ros2_http_gateway/, so `ros2 run ros2_http_gateway ros2-http-gateway` works.
+# Every name is namespaced. A `gateway` alias would make `ros2 run ros2_http_gateway gateway`
+# prettier, and `demo_node` would match the usual ROS convention, but console scripts are
+# generated from these entry points for wheel installs too, so each one would claim a generic
+# name in ~/.local/bin. setup.cfg's install_scripts redirect only affects the colcon/setup.py
+# path, not wheels. Under colcon these land in lib/ros2_http_gateway/, so
+# `ros2 run ros2_http_gateway ros2-http-gateway[-demo]` works.
 ros2-http-gateway = "ros2_http_gateway.cli:main"
+ros2-http-gateway-demo = "ros2_http_gateway.demo_node:main"
 
 [tool.setuptools.dynamic]
 # Single source of truth for the version string. package.xml mirrors it and
@@ -97,6 +98,8 @@ ros2_http_gateway = [
   "config.schema.json",
   # Swagger UI, vendored rather than pulled from a CDN: 1.7MB, licences alongside it.
   "static/swagger/*",
+  # The test console: one HTML, one JS, one CSS. No build step, no bundler, no CDN.
+  "static/console/*",
 ]
 
 [tool.ruff]
@@ -142,6 +145,9 @@ module = [
   "action_msgs.*",
   "builtin_interfaces.*",
   "unique_identifier_msgs.*",
+  # The demo node's own interface packages, imported lazily inside it.
+  "example_interfaces.*",
+  "std_srvs.*",
 ]
 ignore_missing_imports = true
 

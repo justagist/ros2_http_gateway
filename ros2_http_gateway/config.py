@@ -45,6 +45,11 @@ _BUILT_IN_ROUTES: Final = (
     ("GET", "/health", "health"),
     ("GET", "/openapi.json", "OpenAPI document"),
     ("GET", "/docs", "Swagger UI"),
+    # Reserved even when `http.console` is false, so enabling the console can never turn a
+    # working config into a colliding one.
+    ("GET", "/whoami", "identity"),
+    ("GET", "/console", "test console"),
+    ("GET", "/console/manifest", "console manifest"),
 )
 
 Kind = Literal["topic", "service", "action"]
@@ -144,6 +149,7 @@ class HttpConfig:
     bind: str
     port: int
     base_path: str
+    console: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,7 +610,12 @@ class _Builder:
                 "proxy in front of it or bind to %s",
                 DEFAULT_BIND,
             )
-        return HttpConfig(bind=bind, port=raw.get("port", DEFAULT_PORT), base_path=base_path)
+        return HttpConfig(
+            bind=bind,
+            port=raw.get("port", DEFAULT_PORT),
+            base_path=base_path,
+            console=raw.get("console", False),
+        )
 
     def audit(self) -> AuditConfig:
         raw = self.document.get("audit", {})

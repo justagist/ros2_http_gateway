@@ -274,6 +274,42 @@ connected stream cannot hold shutdown open.
 finish, flushes the audit queue and destroys the ROS node, in that order. Ctrl-C exits 130
 without a traceback; `SIGTERM` propagates as usual, which is what an init system expects.
 
+## The console routes
+
+Present only when `http.console` is true.
+
+### `GET <base>/whoami`
+
+```json
+{"user": "hmi-station-1", "roles": ["operator"]}
+```
+
+Any token the gateway accepts, including one whose role no endpoint uses: it is still a valid
+token and is entitled to be told what it is. This is the only route with no role requirement.
+
+### `GET <base>/console/manifest`
+
+Everything the caller may touch, and nothing else. Per endpoint: the path and a ready-to-use
+URL, the kind (`topic_read`, `topic_write`, `service`, `action`), the ROS name and type, roles,
+path parameters, `stale_after_ms` or `timeout_ms`, any `request_map`, any precondition (with the
+state endpoint, dotted field and allow-map), stream membership, and for an action the four
+derived routes. Schemas are referenced rather than embedded: a component key plus the URL of the
+OpenAPI document to resolve it in.
+
+**Filtered by role**, more strictly than the OpenAPI document: an endpoint the caller cannot use
+does not appear, and neither does its ROS name, its type, or its membership of the event stream.
+A token holding no role used by any endpoint gets 403.
+
+All URLs in it follow `X-Forwarded-Prefix`, so a console served behind a proxy needs no
+knowledge of the prefix.
+
+### `GET <base>/console`
+
+The console itself: one HTML page plus one CSS and one JS file from package data. No CDN, no
+build step. Unauthenticated, for the same reason as `<base>/docs` -- a browser cannot attach a
+header to a navigation -- and it holds no information about the API: it asks for a token and
+then fetches `whoami` and the manifest, both of which are guarded and audited.
+
 ## Audit
 
 One JSON line per authenticated request: timestamp, user, roles, method, path, decision and

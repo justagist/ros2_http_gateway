@@ -94,6 +94,32 @@ curl -H 'Authorization: Bearer dev-token-change-me' \
 Interactive docs are served from `/api/v1/docs`, the raw document from
 `/api/v1/openapi.json`.
 
+## Demo tour
+
+Two terminals and a browser, against a demo node that publishes a cycling mission state, chats
+at 2 Hz, answers a service and serves a deliberately slow action:
+
+```bash
+ros2 run ros2_http_gateway ros2-http-gateway-demo   # terminal 1
+ros2-http-gateway examples/demo.yaml                # terminal 2
+```
+
+Then open <http://127.0.0.1:8080/api/v1/console> and paste `demo-operator-token`. Everything the
+console shows is discovered from `<base>/console/manifest`, filtered to that token's roles --
+paste `demo-viewer-token` instead and the write, the service and the action disappear from the
+page, because a token is never told about an endpoint it cannot use.
+
+The service is gated on the live mission state, so it flips between success and
+`PRECONDITION_FAILED` every eight seconds as the demo cycles:
+
+```bash
+curl -sS -X POST -H 'Authorization: Bearer demo-operator-token' \
+  -d '{}' http://127.0.0.1:8080/api/v1/mission/start
+```
+
+The console is a testing tool -- auth matrix, schema-driven forms, goal cards, a stream panel --
+and is off unless `http.console: true`. It is deliberately not an HMI.
+
 ## Supported versions
 
 Python 3.10+, ROS 2 Humble, Jazzy, Kilted, Lyrical and Rolling. Humble is the feature

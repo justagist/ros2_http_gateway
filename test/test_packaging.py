@@ -87,19 +87,23 @@ def test_console_scripts_install_where_ros2_run_looks() -> None:
     assert "install_scripts = $base/lib/ros2_http_gateway" in cfg
 
 
-def test_exactly_one_console_script_and_it_is_namespaced() -> None:
-    """A bare `gateway` alias would claim ~/.local/bin/gateway on every pip install.
+def test_every_console_script_is_namespaced() -> None:
+    """A `gateway` or `demo_node` alias would claim a generic name on every pip install.
 
     Wheel installs generate console scripts from these same entry points, and setup.cfg's
-    install_scripts redirect only applies to the colcon/setup.py path. So the alias cannot
-    exist without grabbing a generic name on the user's PATH.
+    install_scripts redirect only applies to the colcon/setup.py path. So a friendly short name
+    cannot exist without grabbing it on the user's PATH -- which is why the demo is invoked as
+    `ros2 run ros2_http_gateway ros2-http-gateway-demo` and not as `demo_node`.
     """
     scripts = _pyproject()["project"]["scripts"]
-    assert scripts == {"ros2-http-gateway": "ros2_http_gateway.cli:main"}
+    assert scripts, "the package must install at least the gateway itself"
+    for name in scripts:
+        assert name.startswith("ros2-http-gateway"), f"{name} is not namespaced"
 
-    # setup.py carries the same single entry point for the ament install path.
+    # setup.py carries the same entry points for the ament install path.
     setup_py = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
-    assert "ros2-http-gateway = " in setup_py
+    for name in scripts:
+        assert f"{name} = " in setup_py, f"{name} is missing from setup.py"
     assert '"gateway = ' not in setup_py and 'f"gateway = ' not in setup_py
 
 
