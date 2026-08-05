@@ -11,12 +11,13 @@ readme = "README.md"
 # colcon's package identification cannot parse the SpecifierSet that setuptools builds
 # from a pyproject `requires-python`.
 license = { text = "Apache-2.0" }
-authors = [{ name = "Saif Sidhik", email = "saif.sidhik@helloleap.ai" }]
+authors = [{ name = "Saif Sidhik", email = "mail@saifsidhik.page" }]
 keywords = ["ros", "ros2", "http", "rest", "gateway", "sse", "openapi", "robotics"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Intended Audience :: Manufacturing",
+  "Intended Audience :: Science/Research",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -24,6 +25,8 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering",
+  "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+  "Operating System :: POSIX :: Linux",
   "Typing :: Typed",
 ]
 

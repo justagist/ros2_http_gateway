@@ -8,6 +8,16 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- `MANIFEST.in`, so the sdist carries the test fixtures, golden files and the vendored OpenAPI
+  meta-schema its tests import, plus `docs/` and `bench/`. Without it the shipped tests could not
+  run; they now pass from an unpacked sdist.
+- `docs/deployment.md`: TLS, several cells behind one nginx, prefix resolution, token handling and
+  process lifecycle -- the reverse-proxy material that used to sit in the README.
+- README rewritten around what the tool does: badges, the config that produces the screenshot, the
+  screenshot, then the two-terminal tour. The non-goals section is gone (its one load-bearing fact,
+  that large blobs are out of scope, moved to the JSON section) and the proxy cookbook moved to
+  `docs/deployment.md`.
+
 - `docs/decisions.md`: the settled questions as one-line records, so they are not re-litigated.
 - An `e2e` suite driving the console in chromium through playwright, against the real demo node:
   wallet and role filtering, the auth matrix grid, a tile's staleness countdown and expiry, a write
@@ -22,6 +32,7 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- The maintainer address is `mail@saifsidhik.page` in both `pyproject.toml` and `package.xml`.
 - The console reported a cancel's outcome in the goal's status line, where the next poll overwrote
   it -- so a second cancel's `ALREADY_TERMINAL` was invisible. It has its own line now, which is
   also the right place for it: the answer to a cancel request is not a goal status. Found by the

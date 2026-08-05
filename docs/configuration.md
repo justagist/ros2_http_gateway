@@ -342,4 +342,4 @@ HTTP 400 quoting the dotted path of the field:
 The full status taxonomy is in [protocol.md](protocol.md).
 
 Large binary payloads (images, point clouds) are a non-goal: base64 in JSON is the wrong
-transport for them. See the non-goals in the README.
+transport for them: this is a JSON gateway, not a data plane.

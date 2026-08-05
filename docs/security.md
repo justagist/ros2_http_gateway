@@ -83,7 +83,8 @@ Not a design goal, but the obvious footguns are bounded:
   marks the record `"credential": "query"`; if that trade is unacceptable, do not configure an
   `sse` block, or terminate EventSource in your own front end and use the header.
 
-There is no rate limiting and no request size limit. Put both in the reverse proxy.
+There is no rate limiting and no request size limit. Put both in the reverse proxy; see
+[deployment.md](deployment.md).
 
 ## What roles do and do not protect
 

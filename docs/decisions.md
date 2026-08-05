@@ -91,8 +91,8 @@ Order is roughly the order they were settled in, not importance.
     and the Swagger UI page are each tested to mention no ROS name, interface type or endpoint path.
     Each asks for a token before fetching anything.
 26. **The gateway does not terminate TLS**, binds localhost unless told otherwise, and has no rate
-    limit or body size limit. All of that belongs in the reverse proxy, whose configuration is in
-    the README.
+    limit or body size limit. All of that belongs in the reverse proxy; the configuration for it is
+    in [deployment.md](deployment.md).
 27. **The audit sink is never served over HTTP.** Exposing it would hand one caller another's
     activity. The console derives the audit line it expects from the response instead, and a test
     compares that derivation against the real records.

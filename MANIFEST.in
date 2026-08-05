@@ -1,0 +1,27 @@
+# setuptools puts `test/test_*.py` in the sdist by default but not what those files import, so
+# without this the shipped tests cannot run: the fixtures, the golden files and the vendored
+# OpenAPI meta-schema would all be absent. A source distribution whose tests do not run is a
+# source distribution nobody can verify.
+include MANIFEST.in
+include LICENSE
+include setup.cfg
+include package.xml
+
+recursive-include test *.py *.mjs *.json *.txt
+recursive-include docs *.md *.png
+recursive-include bench *.py *.md
+recursive-include examples *.yaml
+recursive-include scripts *.py
+include resource/ros2_http_gateway
+
+# Package data is declared in pyproject as well; repeated here so an sdist built by a setuptools
+# old enough to ignore `[tool.setuptools.package-data]` still carries it.
+recursive-include ros2_http_gateway/static *
+include ros2_http_gateway/config.schema.json
+include ros2_http_gateway/py.typed
+
+# Never ship build or scratch output.
+prune .github
+prune .docs
+exclude .pre-commit-config.yaml
+global-exclude __pycache__ *.py[cod] .DS_Store
