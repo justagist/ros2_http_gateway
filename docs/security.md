@@ -10,8 +10,7 @@ are already inside a trust boundary you control: an HMI on the cell network, a f
 dashboard behind a VPN, a customer integration behind a reverse proxy. It is not an
 internet-facing API and it is not an identity provider.
 
-The one-line rationale for each decision is in [decisions.md](decisions.md); this file carries
-the ones that need more than a line.
+This file carries the decisions that need more than a line of rationale.
 
 ## Deny by default
 

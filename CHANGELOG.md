@@ -18,7 +18,6 @@ All notable changes to this project are documented here. Format follows
   that large blobs are out of scope, moved to the JSON section) and the proxy cookbook moved to
   `docs/deployment.md`.
 
-- `docs/decisions.md`: the settled questions as one-line records, so they are not re-litigated.
 - An `e2e` suite driving the console in chromium through playwright, against the real demo node:
   wallet and role filtering, the auth matrix grid, a tile's staleness countdown and expiry, a write
   round-tripping into its read tile, the gate flipping both ways with the call agreeing, a goal

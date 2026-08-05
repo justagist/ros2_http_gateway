@@ -1,5 +1,7 @@
 # ros2_http_gateway
 
+**A YAML file in, an authenticated HTTP API out.** No code to write, no client to build.
+
 [![CI](https://github.com/justagist/ros2_http_gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/justagist/ros2_http_gateway/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![ROS 2 Humble | Jazzy | Kilted | Lyrical | Rolling](https://img.shields.io/badge/ROS%202-Humble%20%7C%20Jazzy%20%7C%20Kilted%20%7C%20Lyrical%20%7C%20Rolling-22314E.svg)](#supported-versions)
@@ -7,14 +9,16 @@
 [![mypy: strict](https://img.shields.io/badge/mypy-strict-2a6db2.svg)](pyproject.toml)
 [![lint: ruff](https://img.shields.io/badge/lint-ruff-d7ff64.svg)](pyproject.toml)
 
-**One YAML file decides exactly which ROS 2 topics, services and actions are reachable over
-HTTP** -- with per-endpoint roles, state-based preconditions, audit logging, server-sent events
-and a generated OpenAPI 3.1 document. Nothing is exposed unless you name it.
+One config file decides exactly which ROS 2 topics, services and actions are reachable over HTTP --
+with per-endpoint roles, state-based preconditions, audit logging, server-sent events and a
+generated OpenAPI 3.1 document. Nothing is exposed unless you name it.
 
-## What one config file gets you
+## No code, only config
 
-Below is [`examples/demo.yaml`](examples/demo.yaml), trimmed. Serve it and the built-in console
-renders itself from it -- forms, live tiles, gates, goal cards -- with no client code written:
+Serve the file and you get the endpoints, an OpenAPI document describing them and a built-in
+console for exercising them straight away. Below is [`examples/demo.yaml`](examples/demo.yaml),
+trimmed; the screenshot under it is that console rendering itself from exactly this config --
+forms, live tiles, gates, goal cards:
 
 ```yaml
 endpoints:
@@ -48,7 +52,7 @@ endpoints:
 
 auth:
   tokens:
-    - token_sha256: "61112491d046c3f6f8ab801f170d9b2d0c734a17ceff60dee92123fb507cfc3f"
+    - token_sha256: "61112491d046c3f6f8ab801f170d9b2d0c734a17ceff60dee92123fb507cfc3f" # sha256 of 'demo-operator-token'
       user: demo-operator
       roles: [operator]
 
@@ -65,6 +69,13 @@ transports and a slow-consumer switch. [Full page](https://raw.githubusercontent
 
 ## Try it in two terminals
 
+The demo publishes `example_interfaces` messages, which a `ros-base` install does not carry
+(`std_srvs` and the rest come with it already):
+
+```bash
+sudo apt install ros-$ROS_DISTRO-example-interfaces
+```
+
 ```bash
 # terminal 1 -- a demo node: mission state cycling IDLE/RUNNING, a 2 Hz topic, a service, an action
 ros2 run ros2_http_gateway ros2-http-gateway-demo
@@ -72,6 +83,9 @@ ros2 run ros2_http_gateway ros2-http-gateway-demo
 # terminal 2
 ros2-http-gateway examples/demo.yaml
 ```
+
+`examples/demo.yaml` is the checkout path; an installed copy sits at
+`$(ros2 pkg prefix ros2_http_gateway)/share/ros2_http_gateway/examples/demo.yaml`.
 
 Open <http://127.0.0.1:8080/api/v1/console> and paste `demo-operator-token`. Or stay in the shell:
 
@@ -105,13 +119,13 @@ on the robot to verify those pinned types against the live graph too.
 That is the right tool for a debugging UI on a bench, and the wrong tool for a machine that has to
 pass a security review.
 
-| | rosbridge | ros2_http_gateway |
-|---|---|---|
-| Exposed surface | whole graph, discovered at runtime | only what the config names |
-| Transport | WebSocket, custom protocol | plain HTTP + SSE, described in OpenAPI |
-| Auth | optional shared secret | per-token identity, per-endpoint roles |
-| Authorisation | none | roles plus state-based preconditions |
-| Audit | none | one JSON line per authenticated request |
+|                 | rosbridge                          | ros2_http_gateway                       |
+| --------------- | ---------------------------------- | --------------------------------------- |
+| Exposed surface | whole graph, discovered at runtime | only what the config names              |
+| Transport       | WebSocket, custom protocol         | plain HTTP + SSE, described in OpenAPI  |
+| Auth            | optional shared secret             | per-token identity, per-endpoint roles  |
+| Authorisation   | none                               | roles plus state-based preconditions    |
+| Audit           | none                               | one JSON line per authenticated request |
 
 ## Install
 
@@ -124,36 +138,42 @@ pip install ros2-http-gateway
 `source /opt/ros/$ROS_DISTRO/setup.bash`.
 
 On a Debian-managed Python -- which is what a ROS container gives you -- install into a virtualenv
-rather than fighting PEP 668. Upgrading pip inside it matters on Humble, where pip 22 installs an
+rather than fighting PEP 668. `--system-site-packages` is what keeps `rclpy` and the interface
+packages importable, and upgrading pip inside the venv matters on Humble, where pip 22 installs an
 editable package with `setup.py develop` and so ignores `pyproject.toml` metadata entirely:
 
 ```bash
+sudo apt install python3-venv          # not present in a ros-base image
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install ros2-http-gateway
 ```
 
-In a colcon workspace:
+In a colcon workspace, where `rosdep` covers the runtime dependencies:
 
 ```bash
 cd ~/ws/src && git clone https://github.com/justagist/ros2_http_gateway.git
-cd ~/ws && colcon build --packages-select ros2_http_gateway
+cd ~/ws && rosdep install --from-paths src -y --ignore-src
+colcon build --packages-select ros2_http_gateway
 source install/setup.bash
 ros2 run ros2_http_gateway ros2-http-gateway --help
 ```
 
+`example_interfaces` and `test_msgs` are declared as test dependencies rather than runtime ones, so
+`rosdep install` picks them up but a deployment install does not: the gateway itself needs neither,
+only the demo node and the test suite do. That is why the demo names the one `apt install` it
+needs, and says so again in its own error message if you forget.
+
 ## Documentation
 
-| | |
-|---|---|
-| [docs/configuration.md](docs/configuration.md) | every config key, and the rule each one enforces |
-| [docs/protocol.md](docs/protocol.md) | the wire protocol: bodies, status codes, streams, audit |
-| [docs/security.md](docs/security.md) | the security model and its known gaps |
-| [docs/deployment.md](docs/deployment.md) | TLS, and several cells behind one nginx |
-| [docs/decisions.md](docs/decisions.md) | settled questions, one line each, so they stay settled |
-| [docs/release.md](docs/release.md) | how a release is cut |
-| [bench/RESULTS.md](bench/RESULTS.md) | benchmark numbers, and how to reproduce them |
-| [CHANGELOG.md](CHANGELOG.md) | what is real in each version |
+|                                                |                                                         |
+| ---------------------------------------------- | ------------------------------------------------------- |
+| [docs/configuration.md](docs/configuration.md) | every config key, and the rule each one enforces        |
+| [docs/protocol.md](docs/protocol.md)           | the wire protocol: bodies, status codes, streams, audit |
+| [docs/security.md](docs/security.md)           | the security model and its known gaps                   |
+| [docs/deployment.md](docs/deployment.md)       | TLS, and several cells behind one nginx                 |
+| [bench/RESULTS.md](bench/RESULTS.md)           | benchmark numbers, and how to reproduce them            |
+| [CHANGELOG.md](CHANGELOG.md)                   | what is real in each version                            |
 
 ## The test console
 
@@ -213,14 +233,14 @@ OpenAPI document -- happens at startup, so a request is lookups and precompiled 
 Measured with `python3 bench/run.py` on a 24-core i7-14650HX, Jazzy, `rmw_fastrtps_cpp`. Full
 table and caveats in [bench/RESULTS.md](bench/RESULTS.md).
 
-| | |
-|---|---|
-| Cached topic `GET` | 11.8k req/s, p99 3.8 ms |
-| Service round trip | p50 0.91 ms, p99 1.65 ms |
-| State precondition | +10 us end to end, 1.1 us p99 measured alone |
-| `msg -> dict` (`sensor_msgs/Imu`) | 1.2 us, 44x `rosidl_runtime_py` |
-| Event stream, 32 clients | 6.2k events/s for 18.7% of one core |
-| Idle, no traffic | 0.5% of one core |
+|                                   |                                              |
+| --------------------------------- | -------------------------------------------- |
+| Cached topic `GET`                | 11.8k req/s, p99 3.8 ms                      |
+| Service round trip                | p50 0.91 ms, p99 1.65 ms                     |
+| State precondition                | +10 us end to end, 1.1 us p99 measured alone |
+| `msg -> dict` (`sensor_msgs/Imu`) | 1.2 us, 44x `rosidl_runtime_py`              |
+| Event stream, 32 clients          | 6.2k events/s for 18.7% of one core          |
+| Idle, no traffic                  | 0.5% of one core                             |
 
 The stream row is the point of "encode once, fan out bytes": 32 clients cost 1.7x the CPU of one,
 because a sample is converted and framed once and the same `bytes` object goes to every queue.

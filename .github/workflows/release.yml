@@ -43,8 +43,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # Trusted publishing: PyPI verifies this workflow's OIDC identity, so there is no API token
-    # to store or leak. It requires a one-time setup in the PyPI UI, described in
-    # docs/release.md. An environment adds a second gate the maintainer can require a review on.
+    # to store or leak. It requires a one-time setup in the PyPI UI, done by the maintainer. An
+    # environment adds a second gate the maintainer can require a review on.
     environment: pypi
     permissions:
       id-token: write
