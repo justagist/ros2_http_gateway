@@ -249,11 +249,13 @@ http:
 
 The gateway does not terminate TLS. Bind it to localhost and put a reverse proxy in front.
 
-`console: true` adds `<base>/console` (a testing UI), `<base>/console/manifest` and
-`<base>/whoami`. Off means those routes are not registered at all, not that they answer 403.
-The manifest is filtered to the caller's roles: a token is never told about an endpoint it
-cannot use. Those three paths are reserved for collision checking whether or not the console is
-enabled, so turning it on can never break a config that loaded.
+`console: true` adds `<base>/console` (a testing UI), its two asset routes and
+`<base>/console/manifest`, all on the same port -- there is no second server. Off means those
+routes are not registered at all, not that they answer 403. `<base>/whoami` is outside the switch:
+every deployment serves it. The manifest is filtered to the caller's roles: a token is never told
+about an endpoint it cannot use. The console paths and `/whoami` are reserved for collision
+checking whether or not the console is enabled, so turning it on can never break a config that
+loaded.
 
 The console is a *testing* tool -- an auth matrix, request forms driven by the generated
 schemas, goal cards, a stream panel. It is not an HMI and deliberately has no dashboards,
