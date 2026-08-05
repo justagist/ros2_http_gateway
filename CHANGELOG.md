@@ -6,70 +6,9 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-05
+
 ### Added
-
-- `MANIFEST.in`, so the sdist carries the test fixtures, golden files and the vendored OpenAPI
-  meta-schema its tests import, plus `docs/` and `bench/`. Without it the shipped tests could not
-  run; they now pass from an unpacked sdist.
-- `docs/deployment.md`: TLS, several cells behind one nginx, prefix resolution, token handling and
-  process lifecycle -- the reverse-proxy material that used to sit in the README.
-- README rewritten around what the tool does: badges, the config that produces the screenshot, the
-  screenshot, then the two-terminal tour. The non-goals section is gone (its one load-bearing fact,
-  that large blobs are out of scope, moved to the JSON section) and the proxy cookbook moved to
-  `docs/deployment.md`.
-
-- An `e2e` suite driving the console in chromium through playwright, against the real demo node:
-  wallet and role filtering, the auth matrix grid, a tile's staleness countdown and expiry, a write
-  round-tripping into its read tile, the gate flipping both ways with the call agreeing, a goal
-  through feedback to a result, cancel and re-cancel, TTL eviction, both stream transports and the
-  heartbeat difference between them, and slow-consumer mode. Deselected by default, and playwright
-  sits in its own `e2e` extra rather than in `dev` so a browserless CI leg skips the module instead
-  of failing in it. `GATEWAY_E2E_HEADED`, `GATEWAY_E2E_SLOWMO`, `GATEWAY_E2E_VIDEO` and
-  `GATEWAY_E2E_TRACE` make a run watchable.
-- Startup checks on anything derived from config or from another layer raise instead of asserting,
-  so `python -O` is a supported way to run this. The full suite passes under it.
-
-### Fixed
-
-- The maintainer address is `mail@saifsidhik.page` in both `pyproject.toml` and `package.xml`.
-- The console reported a cancel's outcome in the goal's status line, where the next poll overwrote
-  it -- so a second cancel's `ALREADY_TERMINAL` was invisible. It has its own line now, which is
-  also the right place for it: the answer to a cancel request is not a goal status. Found by the
-  browser suite, which is exactly the class of bug the other tests could not see.
-
-- The console's request/response half, entirely discovered from the manifest and the served
-  schemas: a labelled multi-token wallet in local storage with a visible warning, an identity chip
-  from `whoami`, topic tiles with a staleness countdown that flips the tile, schema-driven forms
-  for writes and services with a validated raw-JSON fallback for arrays and deeper structures,
-  per-call latency and a 20-call hammer reporting p50/p95.
-- The auth matrix fires each endpoint as nobody, as a bad token and as every saved token. Anything
-  that is not a GET is probed with a body no converter accepts, so the authorised row reads 400 --
-  the token and its roles were accepted and nothing was published, called or submitted. A gated
-  endpoint refuses even earlier and reads 200 with `PRECONDITION_FAILED`.
-- Response outcomes are rendered as the protocol's own distinctions: 4xx never reached ROS, 503 hit
-  a capacity limit, 200 with `PRECONDITION_FAILED` was refused by a state gate before ROS, 200 with
-  another `error_code` reached ROS and came back unhappy, and a plain 200 worked.
-- Gated commands show the live value of their precondition's state topic beside the button and
-  predict the decision the way the policy engine makes it, including its three refusals: unlisted
-  parameter value, stale state, and nothing published yet.
-- Staleness is measured from when the browser received a sample, never from the server's wall-clock
-  stamp, so a skewed client clock cannot grey out a live tile. The server's own `stale` flag stays
-  authoritative once it is set.
-- The console's logic sits behind a DOM-free seam and is tested through node against the schemas
-  the gateway really generates, since CI has no browser.
-- Goal cards: status by polling, feedback over the goal's own stream (fetch, because that stream
-  needs a bearer header and `EventSource` cannot send one), cancel, `ALREADY_TERMINAL` on a second
-  cancel, the result, a countdown to `result_ttl_s` and then the 404 once evicted. Several at once.
-- An event-stream panel with connect/disconnect, a per-endpoint filter, heartbeats rendered faintly,
-  a seq-gap detector, and a transport toggle between `fetch` with header auth and `EventSource` with
-  the query token. The `EventSource` path also makes visible that the browser swallows comment
-  frames, so heartbeats are invisible on it.
-- Slow-consumer mode stops draining the reader so the gateway's per-client queue fills and the
-  configured `overflow` policy takes over -- `drop_oldest` as gaps in `seq`, `disconnect` as the
-  stream ending.
-- An audit hint under every response and on every auth-matrix row: the decision, outcome and reason
-  the request will have written to the audit log, derived from the answer because the audit sink is
-  deliberately not served. A test compares the derivation against real records.
 
 - `GET <base>/console/manifest`: everything the calling token may touch, and nothing else --
   kind, ROS name and type, roles, path parameters, staleness bound or timeout, `request_map`,
@@ -88,14 +27,85 @@ All notable changes to this project are documented here. Format follows
   one JS, no CDN and no build step. Off means the routes are not registered at all. Its three
   paths are reserved for collision checking regardless, so enabling it cannot break a config that
   already loaded.
+- The console's request/response half, entirely discovered from the manifest and the served
+  schemas: a labelled multi-token wallet in local storage with a visible warning, an identity chip
+  from `whoami`, topic tiles with a staleness countdown that flips the tile, schema-driven forms
+  for writes and services with a validated raw-JSON fallback for arrays and deeper structures,
+  per-call latency and a 20-call hammer reporting p50/p95.
+- The auth matrix fires each endpoint as nobody, as a bad token and as every saved token. Anything
+  that is not a GET is probed with a body no converter accepts, so the authorised row reads 400 --
+  the token and its roles were accepted and nothing was published, called or submitted. A gated
+  endpoint refuses even earlier and reads 200 with `PRECONDITION_FAILED`.
+- Response outcomes are rendered as the protocol's own distinctions: 4xx never reached ROS, 503 hit
+  a capacity limit, 200 with `PRECONDITION_FAILED` was refused by a state gate before ROS, 200 with
+  another `error_code` reached ROS and came back unhappy, and a plain 200 worked.
+- Gated commands show the live value of their precondition's state topic beside the button and
+  predict the decision the way the policy engine makes it, including its three refusals: unlisted
+  parameter value, stale state, and nothing published yet.
+- Staleness is measured from when the browser received a sample, never from the server's wall-clock
+  stamp, so a skewed client clock cannot grey out a live tile. The server's own `stale` flag stays
+  authoritative once it is set.
+- Goal cards: status by polling, feedback over the goal's own stream (fetch, because that stream
+  needs a bearer header and `EventSource` cannot send one), cancel, `ALREADY_TERMINAL` on a second
+  cancel, the result, a countdown to `result_ttl_s` and then the 404 once evicted. Several at once.
+- An event-stream panel with connect/disconnect, a per-endpoint filter, heartbeats rendered faintly,
+  a seq-gap detector, and a transport toggle between `fetch` with header auth and `EventSource` with
+  the query token. The `EventSource` path also makes visible that the browser swallows comment
+  frames, so heartbeats are invisible on it.
+- Slow-consumer mode stops draining the reader so the gateway's per-client queue fills and the
+  configured `overflow` policy takes over -- `drop_oldest` as gaps in `seq`, `disconnect` as the
+  stream ending.
+- An audit hint under every response and on every auth-matrix row: the decision, outcome and reason
+  the request will have written to the audit log, derived from the answer because the audit sink is
+  deliberately not served. A test compares the derivation against real records.
+- The console's logic sits behind a DOM-free seam and is tested through node against the schemas
+  the gateway really generates, since CI has no browser.
 - `ros2 run ros2_http_gateway ros2-http-gateway-demo`: one node with a mission state cycling
   IDLE/RUNNING, a 2 Hz chatter topic, a `std_srvs/Trigger` service and a deliberately slow
   Fibonacci action, plus `examples/demo.yaml` exposing all of it with an operator and a viewer
   token, a state precondition and a two-endpoint event stream.
+- An `e2e` suite driving the console in chromium through playwright, against the real demo node:
+  wallet and role filtering, the auth matrix grid, a tile's staleness countdown and expiry, a write
+  round-tripping into its read tile, the gate flipping both ways with the call agreeing, a goal
+  through feedback to a result, cancel and re-cancel, TTL eviction, both stream transports and the
+  heartbeat difference between them, and slow-consumer mode. Deselected by default, and playwright
+  sits in its own `e2e` extra rather than in `dev` so a browserless CI leg skips the module instead
+  of failing in it. `GATEWAY_E2E_HEADED`, `GATEWAY_E2E_SLOWMO`, `GATEWAY_E2E_VIDEO` and
+  `GATEWAY_E2E_TRACE` make a run watchable.
+- `MANIFEST.in`, so the sdist carries the test fixtures, golden files and the vendored OpenAPI
+  meta-schema its tests import, plus `docs/` and `bench/`. Without it the shipped tests could not
+  run; they now pass from an unpacked sdist.
+- `docs/deployment.md`: TLS, several cells behind one nginx, prefix resolution, token handling and
+  process lifecycle -- the reverse-proxy material that used to sit in the README.
+
+### Changed
+
+- README rewritten around what the tool does: badges, the config that produces the screenshot, the
+  screenshot, then the two-terminal tour. The non-goals section is gone (its one load-bearing fact,
+  that large blobs are out of scope, moved to the JSON section) and the proxy cookbook moved to
+  `docs/deployment.md`.
+- Startup checks on anything derived from config or from another layer raise instead of asserting,
+  so `python -O` is a supported way to run this. The full suite passes under it.
+- The maintainer address is `mail@saifsidhik.page` in both `pyproject.toml` and `package.xml`.
+- README leads with a title and a tagline rather than a wall of prose, names the one `apt install`
+  a `ros-base` image needs before the demo, and gives the installed path of `examples/demo.yaml`
+  for readers who arrived by `pip` rather than by checkout.
+- `docs/release.md` and `docs/decisions.md` are maintainer notes and neither ship nor track with
+  the package; the published set is the four documents a user reads.
+- The sdist no longer carries `docs/*.png`, which nothing inside it referenced -- the README loads
+  those over HTTPS. 1.57 MB down to 683 KB.
+- ROS modules are `follow_imports = "skip"` for mypy rather than only `ignore_missing_imports`. CI
+  lints without ROS installed, so a contributor with it sourced saw thirteen errors from the real
+  untyped `rclpy` that CI never reports.
+
+### Fixed
+
+- The console reported a cancel's outcome in the goal's status line, where the next poll overwrote
+  it -- so a second cancel's `ALREADY_TERMINAL` was invisible. It has its own line now, which is
+  also the right place for it: the answer to a cancel request is not a goal status. Found by the
+  browser suite, which is exactly the class of bug the other tests could not see.
 
 ## [0.1.0] - 2026-08-02
-
-First release.
 
 ### Added
 
@@ -351,5 +361,6 @@ First release.
   no-ROS lint/type/unit job and a ROS distro matrix job.
 - Example configs `examples/dev.yaml` and `examples/locked_down.yaml`.
 
-[Unreleased]: https://github.com/justagist/ros2_http_gateway/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/justagist/ros2_http_gateway/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/justagist/ros2_http_gateway/releases/tag/v0.2.0
 [0.1.0]: https://github.com/justagist/ros2_http_gateway/releases/tag/v0.1.0

@@ -4,7 +4,7 @@
   <name>ros2_http_gateway</name>
   <!-- Mirrors [project] version in pyproject.toml, which is the single source of truth.
        test/test_packaging.py fails the build if the two ever drift. -->
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>Config-driven, authenticated HTTP + SSE gateway for ROS 2</description>
   <maintainer email="mail@saifsidhik.page">Saif Sidhik</maintainer>
   <license>Apache-2.0</license>

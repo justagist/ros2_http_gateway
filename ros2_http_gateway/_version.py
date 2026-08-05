@@ -5,4 +5,4 @@ executes this file for the ament build, and ``package.xml`` mirrors the value un
 test that fails on drift. Do not hard-code the version anywhere else.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

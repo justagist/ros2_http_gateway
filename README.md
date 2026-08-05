@@ -3,7 +3,8 @@
 **A YAML file in, an authenticated HTTP API out.** No code to write, no client to build.
 
 [![CI](https://github.com/justagist/ros2_http_gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/justagist/ros2_http_gateway/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/ros2-http-gateway.svg)](https://pypi.org/project/ros2-http-gateway/)
+[![Python versions](https://img.shields.io/pypi/pyversions/ros2-http-gateway.svg)](https://pypi.org/project/ros2-http-gateway/)
 [![ROS 2 Humble | Jazzy | Kilted | Lyrical | Rolling](https://img.shields.io/badge/ROS%202-Humble%20%7C%20Jazzy%20%7C%20Kilted%20%7C%20Lyrical%20%7C%20Rolling-22314E.svg)](#supported-versions)
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-green.svg)](LICENSE)
 [![mypy: strict](https://img.shields.io/badge/mypy-strict-2a6db2.svg)](pyproject.toml)
