@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -49,13 +50,21 @@ class Server:
         self.accept = True
         self.abort = False
         self.step_delay = 0.02
+        # Set when a goal request arrives. Clear `release` to hold the answer back until set.
+        self.received = threading.Event()
+        self.release = threading.Event()
+        self.release.set()
+        self.cancellable = True
+        self.outcomes: list[tuple[int, str]] = []
         ActionServer(
             self._node,
             Fibonacci,
             ACTION,
             execute_callback=self._execute,
-            goal_callback=lambda _r: GoalResponse.ACCEPT if self.accept else GoalResponse.REJECT,
-            cancel_callback=lambda _g: CancelResponse.ACCEPT,
+            goal_callback=self._on_goal,
+            cancel_callback=lambda _g: (
+                CancelResponse.ACCEPT if self.cancellable else CancelResponse.REJECT
+            ),
             callback_group=ReentrantCallbackGroup(),
         )
         self._executor = rclpy.executors.MultiThreadedExecutor(context=self._context)
@@ -71,12 +80,18 @@ class Server:
             if not self._stopping:
                 raise
 
+    def _on_goal(self, _request: Any) -> GoalResponse:
+        self.received.set()
+        self.release.wait(timeout=10)
+        return GoalResponse.ACCEPT if self.accept else GoalResponse.REJECT
+
     def _execute(self, handle: Any) -> Any:
         feedback = Fibonacci.Feedback()
         sequence = [0, 1]
         for _ in range(handle.request.order):
             if handle.is_cancel_requested:
                 handle.canceled()
+                self.outcomes.append((handle.request.order, "canceled"))
                 result = Fibonacci.Result()
                 result.sequence = sequence
                 return result
@@ -85,6 +100,7 @@ class Server:
             handle.publish_feedback(feedback)
             time.sleep(self.step_delay)
         handle.abort() if self.abort else handle.succeed()
+        self.outcomes.append((handle.request.order, "aborted" if self.abort else "succeeded"))
         result = Fibonacci.Result()
         result.sequence = sequence
         return result
@@ -108,6 +124,12 @@ def endpoints() -> dict[str, Any]:
             "action": ACTION,
             "type": "example_interfaces/action/Fibonacci",
             "roles": ["operator"],
+        },
+        "/hasty": {
+            "action": ACTION,
+            "type": "example_interfaces/action/Fibonacci",
+            "roles": ["operator"],
+            "timeout_ms": 200,
         },
         "/absent": {
             "action": ABSENT_ACTION,
@@ -143,10 +165,12 @@ class Harness:
     ) -> httpx.Response:
         return await self.client.delete(f"{BASE}{path}/{goal_id}", headers=self.headers(token))
 
-    async def wait_for(self, goal_id: str, *, terminal: bool = True, timeout: float = 20.0) -> Any:
+    async def wait_for(
+        self, goal_id: str, *, path: str = "/pick", terminal: bool = True, timeout: float = 20.0
+    ) -> Any:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            payload = (await self.status(goal_id)).json()
+            payload = (await self.status(goal_id, path)).json()
             if terminal and payload["status"] in ("succeeded", "aborted", "canceled"):
                 return payload
             if not terminal and payload["status"] != "accepted":
@@ -312,6 +336,91 @@ async def test_a_bad_goal_body_is_a_400(gateway: Harness) -> None:
     assert "unknown field" in response.json()["message"]
 
 
+async def wait_for_outcome(server: Server, order: int, timeout: float = 20.0) -> str:
+    """Wait for the action server to finish the goal it received with this ``order``."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for seen, outcome in server.outcomes:
+            if seen == order:
+                return outcome
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"the server never finished the goal of order {order}")
+
+
+async def wait_for_released_callbacks(gateway: Harness, path: str, timeout: float = 20.0) -> None:
+    """Wait for the action client to drop every feedback callback, which holds a goal record.
+
+    rclpy drops a callback only when a result request for its goal completes, so a late-accepted
+    goal that nobody asked the result of would keep its discarded record forever.
+    """
+    callbacks = gateway.runtime._action_clients[path]._feedback_callbacks
+    deadline = time.monotonic() + timeout
+    while callbacks and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    assert not callbacks, f"{len(callbacks)} feedback callback(s) still held for {path}"
+
+
+async def test_a_handshake_past_the_timeout_answers_timeout(
+    gateway: Harness, server: Server
+) -> None:
+    """No record is left, and the goal the server accepts late is cancelled, not orphaned."""
+    server.release.clear()
+    try:
+        response = await gateway.submit("/hasty", order=151)
+    finally:
+        server.release.set()
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "TIMEOUT"
+    assert len(gateway.goals) == 0
+    assert await wait_for_outcome(server, 151) == "canceled"
+    await wait_for_released_callbacks(gateway, "/hasty")
+
+
+async def test_a_late_goal_the_server_will_not_cancel_is_logged(
+    gateway: Harness, server: Server, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No client holds its id, so the log is the only trace of a goal that runs on."""
+    server.cancellable = False
+    server.release.clear()
+    try:
+        response = await gateway.submit("/hasty", order=31)
+        assert response.json()["error_code"] == "TIMEOUT"
+        server.release.set()
+        assert await wait_for_outcome(server, 31) == "succeeded"
+    finally:
+        server.release.set()
+        server.cancellable = True
+    assert "would not cancel a goal" in caplog.text
+
+
+async def test_a_submission_cancelled_mid_handshake_leaves_nothing_behind(
+    gateway: Harness, server: Server
+) -> None:
+    server.received.clear()
+    server.release.clear()
+    try:
+        submission = asyncio.create_task(gateway.submit(order=152))
+        assert await asyncio.to_thread(server.received.wait, 10), (
+            "the goal never reached the server"
+        )
+        submission.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await submission
+    finally:
+        server.release.set()
+    assert len(gateway.goals) == 0
+    assert await wait_for_outcome(server, 152) == "canceled"
+    await wait_for_released_callbacks(gateway, "/pick")
+
+
+async def test_a_goal_may_run_longer_than_the_timeout(gateway: Harness) -> None:
+    """The timeout bounds the handshake only; 20 steps take about twice the 200 ms timeout."""
+    response = await gateway.submit("/hasty", order=20)
+    assert response.status_code == 202
+    payload = await gateway.wait_for(response.json()["goal_id"], path="/hasty")
+    assert payload["status"] == "succeeded"
+
+
 # --------------------------------------------------------------------------------------
 # cancel
 # --------------------------------------------------------------------------------------
@@ -338,6 +447,37 @@ async def test_cancelling_a_finished_goal_says_so(gateway: Harness) -> None:
 
 async def test_cancelling_an_unknown_goal_is_a_404(gateway: Harness) -> None:
     assert (await gateway.cancel("f" * 32)).status_code == 404
+
+
+async def test_a_goal_finishing_during_its_cancel_request_keeps_its_result(
+    gateway: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The result can land while the cancel request waits for the server's answer.
+
+    The finished goal must not go back to ``canceling``: status reads would disagree with the
+    stored result, and a new stream would wait for a terminal event that already happened.
+    """
+    goal_id = (await gateway.submit(order=10)).json()["goal_id"]
+    record = gateway.goals.get("/pick", goal_id)
+    assert record is not None
+
+    async def answer_after_the_result(_runtime: RosRuntime, _handle: Any) -> Any:
+        deadline = time.monotonic() + 20
+        while not record.is_terminal and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        return SimpleNamespace(goals_canceling=[object()], return_code=0)
+
+    monkeypatch.setattr(RosRuntime, "cancel_goal", answer_after_the_result)
+    assert (await gateway.cancel(goal_id)).json()["success"] is True
+
+    payload = (await gateway.status(goal_id)).json()
+    assert payload["status"] == "succeeded"
+    assert payload["result"] is not None
+    async with gateway.client.stream(
+        "GET", f"{BASE}/pick/{goal_id}/stream", headers=gateway.headers()
+    ) as response:
+        body = "".join([chunk async for chunk in response.aiter_text()])
+    assert [name for name, _ in parse_events(body)] == ["terminal"]
 
 
 # --------------------------------------------------------------------------------------

@@ -263,8 +263,10 @@ class _Builder:
                             {"$ref": "#/components/schemas/GoalAccepted"},
                         ),
                         "200": _error_response(
-                            "The request reached ROS, which would not start the goal.",
-                            ("GOAL_REJECTED", "SERVICE_UNAVAILABLE")
+                            "No goal was started and no id is issued. On `TIMEOUT` the server "
+                            "did not answer in time; if it accepts the goal later, the gateway "
+                            "cancels it.",
+                            ("GOAL_REJECTED", "SERVICE_UNAVAILABLE", "TIMEOUT")
                             + (("PRECONDITION_FAILED",) if endpoint.config.preconditions else ()),
                         ),
                         **_refusals(_BAD_REQUEST + _UNAUTHENTICATED + _FORBIDDEN),
