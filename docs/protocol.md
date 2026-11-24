@@ -201,7 +201,8 @@ and refuses the goal. Neither leaves a record behind, so no id is returned.
 
 Cancel answers `200 {"success": true}` once the server accepts the request; the goal then moves
 to `canceling` and reaches `canceled` when the server confirms. `CANCEL_REJECTED` if the server
-declines, `ALREADY_TERMINAL` if it has already finished.
+declines, `ALREADY_TERMINAL` if it has already finished. A goal that finishes while the cancel
+request is in flight keeps its terminal status and result.
 
 **Preconditions apply only to goal submission.** Status, stream and cancel are not gated. A
 state gate able to stop an operator cancelling a goal would be the opposite of a safety

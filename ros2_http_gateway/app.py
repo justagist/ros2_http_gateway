@@ -697,7 +697,9 @@ def _goal_cancel(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalReg
         response = await runtime.cancel_goal(record.handle)
         accepted = bool(response.goals_canceling)
         if accepted:
-            record.status = "canceling"
+            # The result may have landed during the await; a terminal status must stay.
+            if not record.is_terminal:
+                record.status = "canceling"
             return _json({"success": True, "message": "cancellation requested", "error_code": None})
         return _envelope(
             200,

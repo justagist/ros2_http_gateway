@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -404,6 +405,37 @@ async def test_cancelling_a_finished_goal_says_so(gateway: Harness) -> None:
 
 async def test_cancelling_an_unknown_goal_is_a_404(gateway: Harness) -> None:
     assert (await gateway.cancel("f" * 32)).status_code == 404
+
+
+async def test_a_goal_finishing_during_its_cancel_request_keeps_its_result(
+    gateway: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The result can land while the cancel request waits for the server's answer.
+
+    The finished goal must not go back to ``canceling``: status reads would disagree with the
+    stored result, and a new stream would wait for a terminal event that already happened.
+    """
+    goal_id = (await gateway.submit(order=10)).json()["goal_id"]
+    record = gateway.goals.get("/pick", goal_id)
+    assert record is not None
+
+    async def answer_after_the_result(_runtime: RosRuntime, _handle: Any) -> Any:
+        deadline = time.monotonic() + 20
+        while not record.is_terminal and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        return SimpleNamespace(goals_canceling=[object()], return_code=0)
+
+    monkeypatch.setattr(RosRuntime, "cancel_goal", answer_after_the_result)
+    assert (await gateway.cancel(goal_id)).json()["success"] is True
+
+    payload = (await gateway.status(goal_id)).json()
+    assert payload["status"] == "succeeded"
+    assert payload["result"] is not None
+    async with gateway.client.stream(
+        "GET", f"{BASE}/pick/{goal_id}/stream", headers=gateway.headers()
+    ) as response:
+        body = "".join([chunk async for chunk in response.aiter_text()])
+    assert [name for name, _ in parse_events(body)] == ["terminal"]
 
 
 # --------------------------------------------------------------------------------------

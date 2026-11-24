@@ -12,6 +12,7 @@ All notable changes to this project are documented here. Format follows
   `TIMEOUT`, as documented. A timed-out, abandoned or failed submission no longer leaves a
   record behind that eviction could never reclaim, and a goal the server accepts after the
   submission was abandoned is cancelled.
+- A goal that finished while its cancel request was in flight no longer reverts to `canceling`.
 
 ## [0.2.0] - 2026-08-05
 
