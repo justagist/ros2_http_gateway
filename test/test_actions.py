@@ -49,12 +49,14 @@ class Server:
         self.accept = True
         self.abort = False
         self.step_delay = 0.02
+        self.accept_delay = 0.0
+        self.outcomes: list[tuple[int, str]] = []
         ActionServer(
             self._node,
             Fibonacci,
             ACTION,
             execute_callback=self._execute,
-            goal_callback=lambda _r: GoalResponse.ACCEPT if self.accept else GoalResponse.REJECT,
+            goal_callback=self._on_goal,
             cancel_callback=lambda _g: CancelResponse.ACCEPT,
             callback_group=ReentrantCallbackGroup(),
         )
@@ -71,12 +73,17 @@ class Server:
             if not self._stopping:
                 raise
 
+    def _on_goal(self, _request: Any) -> GoalResponse:
+        time.sleep(self.accept_delay)
+        return GoalResponse.ACCEPT if self.accept else GoalResponse.REJECT
+
     def _execute(self, handle: Any) -> Any:
         feedback = Fibonacci.Feedback()
         sequence = [0, 1]
         for _ in range(handle.request.order):
             if handle.is_cancel_requested:
                 handle.canceled()
+                self.outcomes.append((handle.request.order, "canceled"))
                 result = Fibonacci.Result()
                 result.sequence = sequence
                 return result
@@ -85,6 +92,7 @@ class Server:
             handle.publish_feedback(feedback)
             time.sleep(self.step_delay)
         handle.abort() if self.abort else handle.succeed()
+        self.outcomes.append((handle.request.order, "aborted" if self.abort else "succeeded"))
         result = Fibonacci.Result()
         result.sequence = sequence
         return result
@@ -108,6 +116,12 @@ def endpoints() -> dict[str, Any]:
             "action": ACTION,
             "type": "example_interfaces/action/Fibonacci",
             "roles": ["operator"],
+        },
+        "/hasty": {
+            "action": ACTION,
+            "type": "example_interfaces/action/Fibonacci",
+            "roles": ["operator"],
+            "timeout_ms": 200,
         },
         "/absent": {
             "action": ABSENT_ACTION,
@@ -143,10 +157,12 @@ class Harness:
     ) -> httpx.Response:
         return await self.client.delete(f"{BASE}{path}/{goal_id}", headers=self.headers(token))
 
-    async def wait_for(self, goal_id: str, *, terminal: bool = True, timeout: float = 20.0) -> Any:
+    async def wait_for(
+        self, goal_id: str, *, path: str = "/pick", terminal: bool = True, timeout: float = 20.0
+    ) -> Any:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            payload = (await self.status(goal_id)).json()
+            payload = (await self.status(goal_id, path)).json()
             if terminal and payload["status"] in ("succeeded", "aborted", "canceled"):
                 return payload
             if not terminal and payload["status"] != "accepted":
@@ -310,6 +326,56 @@ async def test_a_bad_goal_body_is_a_400(gateway: Harness) -> None:
     )
     assert response.status_code == 400
     assert "unknown field" in response.json()["message"]
+
+
+async def wait_for_outcome(server: Server, order: int, timeout: float = 20.0) -> str:
+    """Wait for the action server to finish the goal it received with this ``order``."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for seen, outcome in server.outcomes:
+            if seen == order:
+                return outcome
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"the server never finished the goal of order {order}")
+
+
+async def test_a_handshake_past_the_timeout_answers_timeout(
+    gateway: Harness, server: Server
+) -> None:
+    """No record is left, and the goal the server accepts late is cancelled, not orphaned."""
+    server.accept_delay = 0.5
+    try:
+        response = await gateway.submit("/hasty", order=151)
+    finally:
+        server.accept_delay = 0.0
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "TIMEOUT"
+    assert len(gateway.goals) == 0
+    assert await wait_for_outcome(server, 151) == "canceled"
+
+
+async def test_a_submission_abandoned_mid_handshake_leaves_nothing_behind(
+    gateway: Harness, server: Server
+) -> None:
+    server.accept_delay = 0.5
+    try:
+        submission = asyncio.create_task(gateway.submit(order=152))
+        await asyncio.sleep(0.1)
+        submission.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await submission
+    finally:
+        server.accept_delay = 0.0
+    assert len(gateway.goals) == 0
+    assert await wait_for_outcome(server, 152) == "canceled"
+
+
+async def test_a_goal_may_run_longer_than_the_timeout(gateway: Harness) -> None:
+    """The timeout bounds the handshake only; 20 steps take about twice the 200 ms timeout."""
+    response = await gateway.submit("/hasty", order=20)
+    assert response.status_code == 202
+    payload = await gateway.wait_for(response.json()["goal_id"], path="/hasty")
+    assert payload["status"] == "succeeded"
 
 
 # --------------------------------------------------------------------------------------

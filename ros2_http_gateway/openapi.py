@@ -264,7 +264,7 @@ class _Builder:
                         ),
                         "200": _error_response(
                             "The request reached ROS, which would not start the goal.",
-                            ("GOAL_REJECTED", "SERVICE_UNAVAILABLE")
+                            ("GOAL_REJECTED", "SERVICE_UNAVAILABLE", "TIMEOUT")
                             + (("PRECONDITION_FAILED",) if endpoint.config.preconditions else ()),
                         ),
                         **_refusals(_BAD_REQUEST + _UNAUTHENTICATED + _FORBIDDEN),

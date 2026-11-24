@@ -613,7 +613,7 @@
                 }
               }
             },
-            "description": "The request reached ROS, which would not start the goal. `error_code` is one of `GOAL_REJECTED`, `SERVICE_UNAVAILABLE`."
+            "description": "The request reached ROS, which would not start the goal. `error_code` is one of `GOAL_REJECTED`, `SERVICE_UNAVAILABLE`, `TIMEOUT`."
           },
           "202": {
             "content": {

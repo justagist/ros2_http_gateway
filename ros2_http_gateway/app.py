@@ -40,6 +40,7 @@ from .params import apply_bindings
 from .policy import PolicyEngine, build_policy
 from .resolve import ResolvedConfig, ResolvedEndpoint
 from .runtime import (
+    ActionTimeoutError,
     ActionUnavailableError,
     RosRuntime,
     ServiceTimeoutError,
@@ -503,6 +504,7 @@ def _goal_submit(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalReg
     from_dict = endpoint.from_dict
     feedback_to_dict = endpoint.feedback_to_dict
     result_to_dict = endpoint.result_to_dict
+    timeout_s = endpoint.config.timeout_ms / 1000.0
     if from_dict is None or feedback_to_dict is None or result_to_dict is None:
         raise RuntimeError(f"{path}: an action endpoint resolved without all three converters")
 
@@ -529,12 +531,24 @@ def _goal_submit(endpoint: ResolvedEndpoint, runtime: RosRuntime, goals: GoalReg
             loop.call_soon_threadsafe(goals.on_feedback, record, encoded)
 
         try:
-            handle = await runtime.send_goal(path, goal, on_feedback)
+            handle = await runtime.send_goal(path, goal, on_feedback, timeout_s)
         except ActionUnavailableError:
             goals.discard(record)
             return _envelope(
                 200, "SERVICE_UNAVAILABLE", f"no server is offering {endpoint.ros_name}"
             )
+        except ActionTimeoutError:
+            goals.discard(record)
+            return _envelope(
+                200,
+                "TIMEOUT",
+                f"{endpoint.ros_name} did not answer within {endpoint.config.timeout_ms}ms",
+            )
+        except BaseException:
+            # Cancelled or failed mid-handshake: no client will learn this id, and nothing
+            # else would ever evict a record that never became terminal.
+            goals.discard(record)
+            raise
 
         if not handle.accepted:
             goals.discard(record)

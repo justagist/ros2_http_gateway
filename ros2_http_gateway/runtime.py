@@ -25,6 +25,7 @@ from .resolve import ResolvedConfig
 _LOG = logging.getLogger(__name__)
 
 __all__ = [
+    "ActionTimeoutError",
     "ActionUnavailableError",
     "RosRuntime",
     "ServiceTimeoutError",
@@ -44,6 +45,10 @@ class ServiceTimeoutError(RuntimeError):
 
 class ActionUnavailableError(RuntimeError):
     """No action server is offering the action this endpoint points at."""
+
+
+class ActionTimeoutError(RuntimeError):
+    """The action server did not accept or reject a goal within the endpoint's timeout."""
 
 
 _NODE_NAME: Final = "ros2_http_gateway"
@@ -73,6 +78,16 @@ def _settle(target: asyncio.Future[Any], source: Any) -> None:
         target.set_result(source.result())
     except Exception as exc:
         target.set_exception(exc)
+
+
+def _cancel_if_accepted(future: Any) -> None:
+    """Cancel a goal whose acceptance arrived after its caller stopped waiting. On a ROS thread."""
+    if future.cancelled() or future.exception() is not None:
+        return
+    handle = future.result()
+    if handle.accepted:
+        _LOG.warning("a goal was accepted after its submission was abandoned; cancelling it")
+        handle.cancel_goal_async()
 
 
 def qos_profile(preset: QosPreset) -> Any:
@@ -308,16 +323,28 @@ class RosRuntime:
         ready: bool = self._action_clients[path].server_is_ready()
         return ready
 
-    async def send_goal(self, path: str, goal: Any, feedback: Any = None) -> Any:
-        """Submit a goal and wait for the server to accept or reject it.
+    async def send_goal(self, path: str, goal: Any, feedback: Any, timeout_s: float) -> Any:
+        """Submit a goal and wait up to ``timeout_s`` for the server to accept or reject it.
 
         ``feedback`` is invoked on a ROS thread. Returns the goal handle, whose ``accepted``
         says whether the server took it.
+
+        rclpy cannot withdraw a goal request. If the wait times out or is cancelled, a goal the
+        server accepts later is cancelled: no caller holds its id, so nobody could follow or
+        stop it.
         """
         client = self._action_clients[path]
         if not client.server_is_ready():
             raise ActionUnavailableError(path)
-        return await self._bridge(client.send_goal_async(goal, feedback_callback=feedback))
+        ros_future = client.send_goal_async(goal, feedback_callback=feedback)
+        try:
+            return await asyncio.wait_for(self._bridge(ros_future), timeout_s)
+        except asyncio.TimeoutError:
+            ros_future.add_done_callback(_cancel_if_accepted)
+            raise ActionTimeoutError(path) from None
+        except asyncio.CancelledError:
+            ros_future.add_done_callback(_cancel_if_accepted)
+            raise
 
     async def goal_result(self, handle: Any) -> Any:
         """Wait for a goal to finish. No timeout: an action is long-running by definition."""

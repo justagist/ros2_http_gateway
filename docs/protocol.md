@@ -208,7 +208,10 @@ state gate able to stop an operator cancelling a goal would be the opposite of a
 feature.
 
 `timeout_ms` bounds the accept/reject handshake, not the goal. An action is long-running by
-definition, so there is no deadline on its result.
+definition, so there is no deadline on its result. A handshake that exceeds it answers `TIMEOUT`
+and leaves no record. ROS cannot withdraw a goal request, so if the server accepts the goal
+later, the gateway cancels it: no client holds its id. The same applies when the HTTP request is
+abandoned mid-handshake.
 
 The per-goal stream keeps a bounded backlog per client (64 frames, not configurable, unlike the
 global stream's `sse.overflow`). A client that cannot keep up loses its **oldest** queued
