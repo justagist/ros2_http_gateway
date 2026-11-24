@@ -173,7 +173,7 @@ An action endpoint at `/pick` generates four routes.
 
 | Route | Result |
 |---|---|
-| `POST <base>/pick` | 202 `{"goal_id": "<uuid>"}`, or 200 with `GOAL_REJECTED` |
+| `POST <base>/pick` | 202 `{"goal_id": "<uuid>"}`, or 200 with `GOAL_REJECTED`, `SERVICE_UNAVAILABLE` or `TIMEOUT` |
 | `GET <base>/pick/{goal_id}` | Status, result and latest feedback |
 | `GET <base>/pick/{goal_id}/stream` | SSE: feedback events, then one terminal event, then close |
 | `DELETE <base>/pick/{goal_id}` | Requests cancellation; 200 with the outcome |
@@ -197,7 +197,8 @@ Goal ids are namespaced per endpoint: two endpoints pointing at the same action 
 them, so an id from one cannot be read through the other's routes.
 
 `SERVICE_UNAVAILABLE` when no action server is offering the action; `GOAL_REJECTED` when one is
-and refuses the goal. Neither leaves a record behind, so no id is returned.
+and refuses the goal; `TIMEOUT` when it does not answer within `timeout_ms`. None of them leaves a
+record behind, so no id is returned.
 
 Cancel answers `200 {"success": true}` once the server accepts the request; the goal then moves
 to `canceling` and reaches `canceled` when the server confirms. `CANCEL_REJECTED` if the server
@@ -211,8 +212,11 @@ feature.
 `timeout_ms` bounds the accept/reject handshake, not the goal. An action is long-running by
 definition, so there is no deadline on its result. A handshake that exceeds it answers `TIMEOUT`
 and leaves no record. ROS cannot withdraw a goal request, so if the server accepts the goal
-later, the gateway cancels it: no client holds its id. The same applies when the HTTP request is
-abandoned mid-handshake.
+later, the gateway cancels it: no client holds its id. The same applies when the request handler
+is cancelled mid-handshake. If the server refuses that cancellation, the gateway logs an error
+and the goal runs on. A client that disconnects mid-handshake does not stop the goal: the
+gateway does not watch for the disconnect, so a goal that is accepted runs as if the client had
+disconnected just after the 202.
 
 The per-goal stream keeps a bounded backlog per client (64 frames, not configurable, unlike the
 global stream's `sse.overflow`). A client that cannot keep up loses its **oldest** queued

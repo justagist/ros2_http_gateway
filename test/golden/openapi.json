@@ -613,7 +613,7 @@
                 }
               }
             },
-            "description": "The request reached ROS, which would not start the goal. `error_code` is one of `GOAL_REJECTED`, `SERVICE_UNAVAILABLE`, `TIMEOUT`."
+            "description": "No goal was started and no id is issued. On `TIMEOUT` the server did not answer in time; if it accepts the goal later, the gateway cancels it. `error_code` is one of `GOAL_REJECTED`, `SERVICE_UNAVAILABLE`, `TIMEOUT`."
           },
           "202": {
             "content": {
