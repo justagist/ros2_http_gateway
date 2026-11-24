@@ -11,9 +11,10 @@ All notable changes to this project are documented here. Format follows
 ### Fixed
 
 - Action submission now applies `timeout_ms` to the accept/reject handshake and answers
-  `TIMEOUT`, as documented. A timed-out, abandoned or failed submission no longer leaves a
+  `TIMEOUT`, as documented. A timed-out, cancelled or failed submission no longer leaves a
   record behind that eviction could never reclaim, and a goal the server accepts after the
-  submission was abandoned is cancelled.
+  submission timed out or was cancelled is cancelled in turn. If the server refuses that
+  cancellation, the gateway logs an error.
 - A goal that finished while its cancel request was in flight no longer reverts to `canceling`.
 
 ## [0.2.0] - 2026-08-05

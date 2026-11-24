@@ -87,7 +87,25 @@ def _cancel_if_accepted(future: Any) -> None:
     handle = future.result()
     if handle.accepted:
         _LOG.warning("a goal was accepted after its submission was abandoned; cancelling it")
-        handle.cancel_goal_async()
+        handle.cancel_goal_async().add_done_callback(_report_refused_cancel)
+        # rclpy keeps the feedback callback, and the record it captures, until a result request
+        # completes. Nothing awaits this one; it only releases them.
+        handle.get_result_async()
+
+
+def _report_refused_cancel(future: Any) -> None:
+    """Log a late-accepted goal the server would not cancel. On a ROS thread.
+
+    No client holds its id, so the log is the only place anyone can learn that it runs on.
+    """
+    if future.cancelled():
+        return
+    if future.exception() is None and future.result().goals_canceling:
+        return
+    _LOG.error(
+        "the action server would not cancel a goal accepted after its submission was abandoned; "
+        "it runs on with no client"
+    )
 
 
 def qos_profile(preset: QosPreset) -> Any:

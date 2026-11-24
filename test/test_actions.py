@@ -50,7 +50,11 @@ class Server:
         self.accept = True
         self.abort = False
         self.step_delay = 0.02
-        self.accept_delay = 0.0
+        # Set when a goal request arrives. Clear `release` to hold the answer back until set.
+        self.received = threading.Event()
+        self.release = threading.Event()
+        self.release.set()
+        self.cancellable = True
         self.outcomes: list[tuple[int, str]] = []
         ActionServer(
             self._node,
@@ -58,7 +62,9 @@ class Server:
             ACTION,
             execute_callback=self._execute,
             goal_callback=self._on_goal,
-            cancel_callback=lambda _g: CancelResponse.ACCEPT,
+            cancel_callback=lambda _g: (
+                CancelResponse.ACCEPT if self.cancellable else CancelResponse.REJECT
+            ),
             callback_group=ReentrantCallbackGroup(),
         )
         self._executor = rclpy.executors.MultiThreadedExecutor(context=self._context)
@@ -75,7 +81,8 @@ class Server:
                 raise
 
     def _on_goal(self, _request: Any) -> GoalResponse:
-        time.sleep(self.accept_delay)
+        self.received.set()
+        self.release.wait(timeout=10)
         return GoalResponse.ACCEPT if self.accept else GoalResponse.REJECT
 
     def _execute(self, handle: Any) -> Any:
@@ -340,35 +347,70 @@ async def wait_for_outcome(server: Server, order: int, timeout: float = 20.0) ->
     raise AssertionError(f"the server never finished the goal of order {order}")
 
 
+async def wait_for_released_callbacks(gateway: Harness, path: str, timeout: float = 20.0) -> None:
+    """Wait for the action client to drop every feedback callback, which holds a goal record.
+
+    rclpy drops a callback only when a result request for its goal completes, so a late-accepted
+    goal that nobody asked the result of would keep its discarded record forever.
+    """
+    callbacks = gateway.runtime._action_clients[path]._feedback_callbacks
+    deadline = time.monotonic() + timeout
+    while callbacks and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    assert not callbacks, f"{len(callbacks)} feedback callback(s) still held for {path}"
+
+
 async def test_a_handshake_past_the_timeout_answers_timeout(
     gateway: Harness, server: Server
 ) -> None:
     """No record is left, and the goal the server accepts late is cancelled, not orphaned."""
-    server.accept_delay = 0.5
+    server.release.clear()
     try:
         response = await gateway.submit("/hasty", order=151)
     finally:
-        server.accept_delay = 0.0
+        server.release.set()
     assert response.status_code == 200
     assert response.json()["error_code"] == "TIMEOUT"
     assert len(gateway.goals) == 0
     assert await wait_for_outcome(server, 151) == "canceled"
+    await wait_for_released_callbacks(gateway, "/hasty")
 
 
-async def test_a_submission_abandoned_mid_handshake_leaves_nothing_behind(
+async def test_a_late_goal_the_server_will_not_cancel_is_logged(
+    gateway: Harness, server: Server, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No client holds its id, so the log is the only trace of a goal that runs on."""
+    server.cancellable = False
+    server.release.clear()
+    try:
+        response = await gateway.submit("/hasty", order=31)
+        assert response.json()["error_code"] == "TIMEOUT"
+        server.release.set()
+        assert await wait_for_outcome(server, 31) == "succeeded"
+    finally:
+        server.release.set()
+        server.cancellable = True
+    assert "would not cancel a goal" in caplog.text
+
+
+async def test_a_submission_cancelled_mid_handshake_leaves_nothing_behind(
     gateway: Harness, server: Server
 ) -> None:
-    server.accept_delay = 0.5
+    server.received.clear()
+    server.release.clear()
     try:
         submission = asyncio.create_task(gateway.submit(order=152))
-        await asyncio.sleep(0.1)
+        assert await asyncio.to_thread(server.received.wait, 10), (
+            "the goal never reached the server"
+        )
         submission.cancel()
         with pytest.raises(asyncio.CancelledError):
             await submission
     finally:
-        server.accept_delay = 0.0
+        server.release.set()
     assert len(gateway.goals) == 0
     assert await wait_for_outcome(server, 152) == "canceled"
+    await wait_for_released_callbacks(gateway, "/pick")
 
 
 async def test_a_goal_may_run_longer_than_the_timeout(gateway: Harness) -> None:
