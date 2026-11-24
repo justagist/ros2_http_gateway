@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-24
+
 ### Fixed
 
 - Action submission now applies `timeout_ms` to the accept/reject handshake and answers
@@ -369,6 +371,7 @@ All notable changes to this project are documented here. Format follows
   no-ROS lint/type/unit job and a ROS distro matrix job.
 - Example configs `examples/dev.yaml` and `examples/locked_down.yaml`.
 
-[Unreleased]: https://github.com/justagist/ros2_http_gateway/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/justagist/ros2_http_gateway/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/justagist/ros2_http_gateway/releases/tag/v0.2.1
 [0.2.0]: https://github.com/justagist/ros2_http_gateway/releases/tag/v0.2.0
 [0.1.0]: https://github.com/justagist/ros2_http_gateway/releases/tag/v0.1.0
